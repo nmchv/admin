@@ -45,6 +45,8 @@ export function buildServiceRows(
       lastCheckedAt: h?.checked_at ?? null,
       responseTime: h?.response_time ?? null,
       visitors24h: visitors24h[service.id] ?? 0,
+      own: own ?? null,
+      updatedAt: own && own.updated_at > service.updated_at ? own.updated_at : service.updated_at,
     };
   });
 }

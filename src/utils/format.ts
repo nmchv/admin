@@ -24,6 +24,25 @@ export function formatRelative(iso: string | null): string {
   return `${Math.round(h / 24)} дн назад`;
 }
 
+/** ISO → значение для <input type="datetime-local"> (локальное время). */
+export function toLocalInput(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+/** Значение datetime-local → ISO (UTC) или null. */
+export function fromLocalInput(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+export function formatFullDateTime(iso: string): string {
+  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'long', timeStyle: 'short' }).format(new Date(iso));
+}
+
 /** Изменение к предыдущему периоду в %. null — сравнивать не с чем. */
 export function pctChange(current: number, previous: number): number | null {
   if (previous <= 0) return null;

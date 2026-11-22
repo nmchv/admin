@@ -38,6 +38,89 @@ export async function fetchRecentLogs(limit = 10): Promise<LogRow[]> {
   );
 }
 
+export async function fetchServiceLogs(serviceId: string, limit = 20): Promise<LogRow[]> {
+  return unwrap(
+    await supabase
+      .from('cc_system_logs')
+      .select('*')
+      .eq('service_id', serviceId)
+      .order('created_at', { ascending: false })
+      .limit(limit),
+  );
+}
+
+// ---------- запись (только через RPC с серверной проверкой роли) ----------
+
+function humanize(e: { message: string; code?: string }): string {
+  if (e.code === '42501' || /forbidden/i.test(e.message)) return 'Недостаточно прав для этого действия.';
+  if (e.code === '23505') return 'Сервис с таким идентификатором уже существует.';
+  if (e.code === '23514' || e.code === '23502') return 'Значение не прошло проверку — проверьте поля формы.';
+  if (e.code === '22001') return 'Слишком длинное значение (сообщение — до 500 символов).';
+  if (e.code === 'P0002') return 'Сервис не найден.';
+  if (e.code === 'PGRST202') return 'Функция не найдена в БД — примените миграцию 0002_services_maintenance_rpc.sql.';
+  return e.message;
+}
+
+function check(res: { error: { message: string; code?: string } | null }): void {
+  if (res.error) throw new Error(humanize(res.error));
+}
+
+export async function setServiceMaintenance(a: {
+  serviceId: string;
+  active: boolean;
+  message: string | null;
+  until: string | null;
+  /** null — не менять */
+  exempt: boolean | null;
+}): Promise<void> {
+  check(
+    await supabase.rpc('cc_set_maintenance', {
+      p_service_id: a.serviceId,
+      p_active: a.active,
+      p_message: a.message,
+      p_until: a.until,
+      p_exempt: a.exempt,
+    }),
+  );
+}
+
+/** Возвращает число затронутых сервисов. */
+export async function setGlobalMaintenance(a: {
+  active: boolean;
+  message: string | null;
+  until: string | null;
+}): Promise<number> {
+  const res = await supabase.rpc('cc_set_global_maintenance', {
+    p_active: a.active,
+    p_message: a.message,
+    p_until: a.until,
+  });
+  check(res);
+  return Number(res.data ?? 0);
+}
+
+export async function saveService(a: {
+  id: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  url: string | null;
+  github: string | null;
+  isEnabled: boolean;
+}): Promise<string> {
+  const res = await supabase.rpc('cc_upsert_service', {
+    p_id: a.id,
+    p_slug: a.slug,
+    p_name: a.name,
+    p_description: a.description,
+    p_url: a.url,
+    p_github: a.github,
+    p_is_enabled: a.isEnabled,
+  });
+  check(res);
+  return String(res.data);
+}
+
 export async function fetchTotals(from: Date, to: Date): Promise<DashboardTotals> {
   const rows = unwrap<DashboardTotals[]>(
     await supabase.rpc('cc_dashboard_totals', { p_from: from.toISOString(), p_to: to.toISOString() }),

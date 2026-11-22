@@ -66,6 +66,10 @@ export interface ServiceRow {
   lastCheckedAt: string | null;
   responseTime: number | null;
   visitors24h: number;
+  /** Строка индивидуального обслуживания (настройки, не итоговый статус). */
+  own: MaintenanceRow | null;
+  /** Последнее изменение сервиса или его настроек обслуживания. */
+  updatedAt: string;
 }
 
 export type Period = 'today' | '7d' | '30d' | '90d' | '12m' | 'custom';

@@ -7,10 +7,12 @@ import {
   fetchVisitors24h,
 } from '@/lib/supabase/api';
 import { buildServiceRows } from '@/utils/status';
-import type { ServiceRow } from '@/types';
+import type { MaintenanceRow, ServiceRow } from '@/types';
 
 interface ServicesContextValue {
   rows: ServiceRow[];
+  /** Строка глобального обслуживания (null, если миграция ещё не создала её). */
+  globalRow: MaintenanceRow | null;
   loading: boolean;
   error: string | null;
   /** Ошибка только блока аналитики (миграция не применена и т. п.), не мешает статусам. */
@@ -45,6 +47,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
   const value: ServicesContextValue = {
     rows,
+    globalRow: core.data?.maintenance.find((m) => m.is_global) ?? null,
     loading: core.loading,
     error: core.error,
     visitorsError: visitors.error,

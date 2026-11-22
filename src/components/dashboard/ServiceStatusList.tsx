@@ -35,7 +35,7 @@ export function ServiceStatusList() {
           {rows.map(({ service, status, lastCheckedAt, visitors24h }) => (
             <li key={service.id}>
               <Link
-                to="/services"
+                to={`/services/${service.slug}`}
                 className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-elevated/50 sm:px-5"
               >
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-line bg-elevated text-muted">

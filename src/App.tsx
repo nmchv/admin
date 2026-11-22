@@ -8,6 +8,8 @@ import Dashboard from '@/pages/Dashboard';
 import Login from '@/pages/Login';
 import Profile from '@/pages/Profile';
 import Planned from '@/pages/Planned';
+import Services from '@/pages/Services';
+import ServiceDetail from '@/pages/ServiceDetail';
 
 function ConfigError() {
   return (
@@ -41,20 +43,8 @@ function Gate() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
-        <Route
-          path="services"
-          element={
-            <Planned
-              title="Services"
-              stage="этап 2"
-              items={[
-                'Реестр сервисов с поиском и фильтрами',
-                'Индивидуальное и глобальное техническое обслуживание',
-                'Страница обслуживания для приложений',
-              ]}
-            />
-          }
-        />
+        <Route path="services" element={<Services />} />
+        <Route path="services/:slug" element={<ServiceDetail />} />
         <Route
           path="analytics"
           element={
