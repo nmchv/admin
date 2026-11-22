@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg font-sans text-fg antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  ::selection {
+    background: rgba(91, 141, 239, 0.35);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #252a34 transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-elevated px-3.5 py-2 text-sm font-semibold text-fg transition-colors hover:border-[#343b49] hover:bg-[#1d212a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-transparent bg-accent text-[#08090B] hover:bg-[#7aa3f3] hover:border-transparent;
+  }
+  .input {
+    @apply w-full rounded-xl border border-line bg-bg px-3.5 py-2.5 text-sm text-fg placeholder:text-muted/60 transition-colors focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/25;
+  }
+}
