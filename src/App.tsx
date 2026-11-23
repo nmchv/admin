@@ -7,8 +7,12 @@ import { Layout } from '@/components/layout/Layout';
 import Dashboard from '@/pages/Dashboard';
 import Login from '@/pages/Login';
 import Profile from '@/pages/Profile';
-import Planned from '@/pages/Planned';
+import Monitoring from '@/pages/Monitoring';
+import Users from '@/pages/Users';
+import Logs from '@/pages/Logs';
+import Settings from '@/pages/Settings';
 import Services from '@/pages/Services';
+import Analytics from '@/pages/Analytics';
 import ServiceDetail from '@/pages/ServiceDetail';
 
 function ConfigError() {
@@ -45,38 +49,11 @@ function Gate() {
         <Route index element={<Dashboard />} />
         <Route path="services" element={<Services />} />
         <Route path="services/:slug" element={<ServiceDetail />} />
-        <Route
-          path="analytics"
-          element={
-            <Planned
-              title="Analytics"
-              stage="этап 3"
-              items={['Analytics SDK для приложений', 'Источники трафика, устройства, география', 'Аналитика по сервисам']}
-            />
-          }
-        />
-        <Route
-          path="monitoring"
-          element={
-            <Planned
-              title="Monitoring"
-              stage="этап 4"
-              items={['Серверные проверки доступности', 'История сбоев и uptime', 'Мониторинг Supabase']}
-            />
-          }
-        />
-        <Route
-          path="users"
-          element={<Planned title="Users" stage="этап 5" items={['Статистика зарегистрированных пользователей', 'Разбивка по сервисам']} />}
-        />
-        <Route
-          path="logs"
-          element={<Planned title="System Logs" stage="этап 5" items={['Единый журнал событий', 'Фильтры, поиск, детали события']} />}
-        />
-        <Route
-          path="settings"
-          element={<Planned title="Settings" stage="этап 5" items={['Общие настройки', 'Мониторинг, аналитика, уведомления, безопасность']} />}
-        />
+        <Route path="analytics" element={<Analytics />} />
+        <Route path="monitoring" element={<Monitoring />} />
+        <Route path="users" element={<Users />} />
+        <Route path="logs" element={<Logs />} />
+        <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ServicesProvider } from '@/lib/ServicesProvider';
+import { SettingsProvider } from '@/lib/SettingsProvider';
 
 const COLLAPSE_KEY = 'cc:sidebar-collapsed';
 
@@ -30,21 +31,23 @@ export function Layout() {
     });
 
   return (
-    <ServicesProvider>
-      <div className="flex h-full">
-        <Sidebar
-          collapsed={collapsed}
-          onToggle={toggle}
-          mobileOpen={mobileOpen}
-          onCloseMobile={() => setMobileOpen(false)}
-        />
-        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          <Header onOpenMenu={() => setMobileOpen(true)} />
-          <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6">
-            <Outlet />
-          </main>
+    <SettingsProvider>
+      <ServicesProvider>
+        <div className="flex h-full">
+          <Sidebar
+            collapsed={collapsed}
+            onToggle={toggle}
+            mobileOpen={mobileOpen}
+            onCloseMobile={() => setMobileOpen(false)}
+          />
+          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+            <Header onOpenMenu={() => setMobileOpen(true)} />
+            <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6">
+              <Outlet />
+            </main>
+          </div>
         </div>
-      </div>
-    </ServicesProvider>
+      </ServicesProvider>
+    </SettingsProvider>
   );
 }

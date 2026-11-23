@@ -1,8 +1,9 @@
 /*!
  * nmchv maintenance guard
  *
- * Подключение (первым скриптом в <head> приложения):
- *   &lt;script src="https://admin.nmchv.ru/maintenance.js" data-service="geotrainer"&gt;&lt;/script&gt;
+ * Подключение: первым скриптом в head приложения — script с
+ *   src="https://admin.nmchv.ru/maintenance.js" и атрибутом data-service="geotrainer".
+ *   Подробности: docs/connect-service.md в репозитории Control Center.
  *
  * Что делает:
  *  - до отрисовки приложения спрашивает у Supabase (RPC cc_get_maintenance), не на обслуживании ли сервис;

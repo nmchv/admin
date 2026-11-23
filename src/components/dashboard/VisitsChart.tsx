@@ -13,11 +13,19 @@ const METRICS: { key: Metric; label: string }[] = [
   { key: 'page_views', label: 'Просмотры' },
 ];
 
-export function VisitsChart({ range }: { range: Range }) {
+interface Props {
+  range: Range;
+  /** null — все сервисы. */
+  serviceId?: string | null;
+  /** Меняется при ручном обновлении, чтобы перезагрузить данные при том же диапазоне. */
+  nonce?: number;
+}
+
+export function VisitsChart({ range, serviceId = null, nonce = 0 }: Props) {
   const [metric, setMetric] = useState<Metric>('visitors');
   const { data, loading, error, reload } = useAsync(
-    () => fetchSeries(range.from, range.to, range.bucket),
-    [range.from.getTime(), range.to.getTime(), range.bucket],
+    () => fetchSeries(range.from, range.to, range.bucket, serviceId),
+    [range.from.getTime(), range.to.getTime(), range.bucket, serviceId, nonce],
   );
 
   const label = METRICS.find((m) => m.key === metric)!.label;

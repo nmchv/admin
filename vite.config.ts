@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
 /**
- * Подставляет публичные Supabase URL и anon key в dist/maintenance.js,
+ * Подставляет публичные Supabase URL и anon key в dist/maintenance.js и dist/analytics.js,
  * чтобы приложениям хватало одного <script>. Ключ публичный (anon), как и в самом клиенте панели.
  */
 function injectMaintenanceConfig(env: Record<string, string>): Plugin {
@@ -13,16 +13,18 @@ function injectMaintenanceConfig(env: Record<string, string>): Plugin {
     name: 'nmchv-maintenance-config',
     apply: 'build',
     closeBundle() {
-      const file = resolve('dist/maintenance.js');
-      if (!existsSync(file)) return;
       const url = env.VITE_SUPABASE_URL ?? '';
       const key = env.VITE_SUPABASE_ANON_KEY ?? '';
-      const src = readFileSync(file, 'utf8')
-        .split("'__NMCHV_SUPABASE_URL__'")
-        .join(JSON.stringify(url))
-        .split("'__NMCHV_SUPABASE_ANON_KEY__'")
-        .join(JSON.stringify(key));
-      writeFileSync(file, src);
+      for (const name of ['maintenance.js', 'analytics.js']) {
+        const file = resolve('dist', name);
+        if (!existsSync(file)) continue;
+        const src = readFileSync(file, 'utf8')
+          .split("'__NMCHV_SUPABASE_URL__'")
+          .join(JSON.stringify(url))
+          .split("'__NMCHV_SUPABASE_ANON_KEY__'")
+          .join(JSON.stringify(key));
+        writeFileSync(file, src);
+      }
     },
   };
 }

@@ -6,7 +6,7 @@ interface Props {
   label: string;
   value: string | null;
   icon: LucideIcon;
-  hint: string;
+  hint?: string;
   /** % к предыдущему периоду; null — нет данных для сравнения; undefined — сравнение не применимо. */
   delta?: number | null;
   loading?: boolean;

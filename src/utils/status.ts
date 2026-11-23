@@ -20,7 +20,10 @@ export function buildServiceRows(
   maintenance: MaintenanceRow[],
   health: HealthRow[],
   visitors24h: Record<string, number>,
+  /** Проверка старше этого срока не считается актуальной → статус unknown (монитор мог остановиться). */
+  staleAfterMs: number = Infinity,
 ): ServiceRow[] {
+  const now = Date.now();
   const globalRow = maintenance.find((m) => m.is_global);
   const byService = new Map(maintenance.filter((m) => m.service_id).map((m) => [m.service_id as string, m]));
   const healthByService = new Map(health.map((h) => [h.service_id, h]));
@@ -36,7 +39,8 @@ export function buildServiceRows(
       maint = { source: 'individual', message: own.message, until: own.scheduled_until };
     }
 
-    const status: ServiceStatus = maint ? 'maintenance' : (h?.status ?? 'unknown');
+    const stale = h ? now - new Date(h.checked_at).getTime() > staleAfterMs : false;
+    const status: ServiceStatus = maint ? 'maintenance' : h && !stale ? h.status : 'unknown';
 
     return {
       service,

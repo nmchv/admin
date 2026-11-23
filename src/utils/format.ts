@@ -24,6 +24,27 @@ export function formatRelative(iso: string | null): string {
   return `${Math.round(h / 24)} дн назад`;
 }
 
+/** Длительность между двумя моментами (до now, если конец не задан). */
+export function formatSpan(startIso: string, endIso: string | null): string {
+  const ms = (endIso ? new Date(endIso).getTime() : Date.now()) - new Date(startIso).getTime();
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} с`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} ч ${m % 60} мин`;
+  return `${Math.floor(h / 24)} дн ${h % 24} ч`;
+}
+
+export function formatDuration(seconds: number | null): string {
+  if (seconds == null) return '—';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} с`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} мин ${s % 60} с`;
+  return `${Math.floor(m / 60)} ч ${m % 60} мин`;
+}
+
 /** ISO → значение для <input type="datetime-local"> (локальное время). */
 export function toLocalInput(iso: string | null): string {
   if (!iso) return '';

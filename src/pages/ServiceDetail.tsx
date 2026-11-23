@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Activity, ArrowLeft, ExternalLink, Github, Hammer, Loader2, Pencil, RotateCcw, ScrollText, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Github, Hammer, Loader2, Pencil, RotateCcw, ScrollText, TriangleAlert } from 'lucide-react';
+import { IncidentList } from '@/components/monitoring/IncidentList';
+import { ResponseChart } from '@/components/monitoring/ResponseChart';
 import { ConfirmDialog } from '@/components/ui/Modal';
 import { MaintenanceFields, validateMaintenance } from '@/components/services/MaintenanceFields';
 import { ServiceFormDialog } from '@/components/services/ServiceFormDialog';
@@ -9,7 +11,7 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import { useToast } from '@/components/ui/Toast';
 import { useAsync } from '@/hooks/useAsync';
 import { useServices } from '@/lib/ServicesProvider';
-import { fetchServiceLogs, setServiceMaintenance } from '@/lib/supabase/api';
+import { fetchIncidents, fetchServiceLogs, fetchUptime, setServiceMaintenance } from '@/lib/supabase/api';
 import {
   formatDateTime,
   formatFullDateTime,
@@ -29,6 +31,11 @@ export default function ServiceDetail() {
     () => (row ? fetchServiceLogs(row.service.id, 20) : Promise.resolve([])),
     [row?.service.id],
   );
+
+  const uptime = useAsync(fetchUptime, []);
+  const incidents = useAsync(() => (row ? fetchIncidents(row.service.id, 10) : Promise.resolve([])), [row?.service.id]);
+  const up = uptime.data?.find((u) => u.service_id === row?.service.id);
+  const pct = (v: number | null | undefined) => (v == null ? '—' : `${v.toFixed(2)}%`);
 
   const [message, setMessage] = useState('');
   const [until, setUntil] = useState('');
@@ -131,9 +138,6 @@ export default function ServiceDetail() {
             <button className="btn" onClick={() => setEditing(true)}>
               <Pencil className="h-4 w-4" /> Изменить
             </button>
-            <button className="btn" disabled title="Проверка доступности появится на этапе 4 (мониторинг)">
-              <Activity className="h-4 w-4" /> Проверить доступность
-            </button>
             {service.url && (
               <a className="btn" href={service.url} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-4 w-4" /> Сайт
@@ -161,7 +165,21 @@ export default function ServiceDetail() {
             <dd className="mt-0.5 font-semibold tabular-nums">{formatNumber(row.visitors24h)}</dd>
           </div>
         </dl>
-        <p className="mt-4 text-xs text-muted">Подробная статистика по сервису появится в разделе Analytics (этап 3).</p>
+        <p className="mt-4 text-xs text-muted">Подробная статистика по сервису — в разделе Analytics.</p>
+      </section>
+
+      <section className="card p-5">
+        <h3 className="text-sm font-extrabold tracking-tight">Мониторинг</h3>
+        <dl className="mt-3 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+          {[['Uptime 24 ч', pct(up?.uptime_24h)], ['Uptime 7 дн', pct(up?.uptime_7d)], ['Uptime 30 дн', pct(up?.uptime_30d)], ['Среднее время ответа', up?.avg_response_ms != null ? `${Math.round(up.avg_response_ms)} мс` : '—']].map(([k, v]) => (
+            <div key={k}><dt className="text-xs font-semibold text-muted">{k}</dt><dd className="mt-0.5 font-semibold tabular-nums">{v}</dd></div>
+          ))}
+        </dl>
+        <div className="mt-4"><ResponseChart serviceId={service.id} hours={24} /></div>
+        <h4 className="mb-1 mt-5 text-xs font-semibold text-muted">Последние сбои</h4>
+        <div className="-mx-5">
+          {incidents.error ? <ErrorState message={incidents.error} onRetry={incidents.reload} /> : <IncidentList incidents={incidents.data ?? []} />}
+        </div>
       </section>
 
       <section className="card p-5">

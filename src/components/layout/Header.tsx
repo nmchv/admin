@@ -1,5 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Bell, ChevronRight, Menu } from 'lucide-react';
+import { ChevronRight, Menu } from 'lucide-react';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
+import { useSettings } from '@/lib/SettingsProvider';
 import { StatusDot } from '@/components/ui/StatusBadge';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { useServices } from '@/lib/ServicesProvider';
@@ -7,11 +9,21 @@ import { useNow } from '@/hooks/useNow';
 import { summarize } from '@/utils/status';
 import { NAV_BOTTOM, NAV_MAIN } from './Sidebar';
 
+function clock(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz }).format(d);
+  } catch {
+    return new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(d);
+  }
+}
+
 export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
   const { pathname } = useLocation();
   const { user, admin } = useAuth();
   const { rows, loading, error } = useServices();
   const now = useNow();
+  const settings = useSettings();
+  const tz = settings.get('general.timezone');
 
   const current = [...NAV_MAIN, ...NAV_BOTTOM].find((n) => (n.to === '/' ? pathname === '/' : pathname.startsWith(n.to)));
   const title = current?.title ?? 'Control Center';
@@ -44,18 +56,11 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
         <span className="text-xs font-semibold text-muted">{loading ? 'Загрузка…' : summary.label}</span>
       </div>
 
-      <time className="hidden text-sm font-semibold tabular-nums text-muted sm:block">
-        {new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(now)}
+      <time className="hidden text-sm font-semibold tabular-nums text-muted sm:block" title={tz}>
+        {clock(now, tz)}
       </time>
 
-      <button
-        className="btn !px-2.5 opacity-60"
-        disabled
-        title="Центр уведомлений запланирован (этап 5)"
-        aria-label="Центр уведомлений — запланирован"
-      >
-        <Bell className="h-4 w-4" />
-      </button>
+      <NotificationBell />
 
       <Link
         to="/profile"

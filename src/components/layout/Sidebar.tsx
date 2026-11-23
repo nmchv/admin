@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { StatusDot } from '@/components/ui/StatusBadge';
 import { useServices } from '@/lib/ServicesProvider';
+import { useSettings } from '@/lib/SettingsProvider';
 import { summarize } from '@/utils/status';
 
 export const NAV_MAIN = [
@@ -39,6 +40,7 @@ interface Props {
 
 export function Sidebar({ collapsed, onToggle, mobileOpen, onCloseMobile }: Props) {
   const { rows, loading, error } = useServices();
+  const settings = useSettings();
   const summary = error ? { tone: 'unknown' as const, label: 'Supabase недоступен' } : summarize(rows);
   // На мобильных меню всегда развёрнуто; сворачивание — только для desktop.
   const slim = collapsed;
@@ -80,8 +82,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onCloseMobile }: Prop
             <span className="text-sm font-extrabold tracking-tight text-accent">nm</span>
           </div>
           <div className={`min-w-0 flex-1 ${slim ? 'lg:hidden' : ''}`}>
-            <p className="truncate text-sm font-extrabold tracking-tight">nmchv</p>
-            <p className="truncate text-xs text-muted">Control Center</p>
+            <p className="truncate text-sm font-extrabold tracking-tight">{settings.get('general.ecosystem_name')}</p>
+            <p className="truncate text-xs text-muted">{settings.get('general.system_name')}</p>
           </div>
           <button className="text-muted hover:text-fg lg:hidden" onClick={onCloseMobile} aria-label="Закрыть меню">
             <X className="h-5 w-5" />

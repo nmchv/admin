@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useAsync } from '@/hooks/useAsync';
+import { useSettings } from '@/lib/SettingsProvider';
 import {
   fetchLatestHealth,
   fetchMaintenance,
@@ -37,12 +38,15 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   );
   const visitors = useAsync(fetchVisitors24h, []);
 
+  const settings = useSettings();
+  const staleAfterMs = Math.max(settings.get('monitoring.interval_minutes') * 3, 15) * 60_000;
+
   const rows = useMemo(
     () =>
       core.data
-        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {})
+        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {}, staleAfterMs)
         : [],
-    [core.data, visitors.data],
+    [core.data, visitors.data, staleAfterMs],
   );
 
   const value: ServicesContextValue = {

@@ -8,11 +8,11 @@
 |---|---|---|
 | 1. Основа | Каркас, дизайн-система, Sidebar/Header, Dashboard, Supabase, авторизация, миграция | ✅ готово |
 | 2. Управление сервисами | Реестр, обслуживание (индивидуальное/глобальное), страница обслуживания | ✅ готово |
-| 3. Аналитика | Analytics SDK, приём событий (Edge Function), графики | ⏳ запланировано |
-| 4. Мониторинг | Серверные проверки, история, uptime | ⏳ запланировано |
-| 5. Дополнительно | Users, System Logs, уведомления, настройки | ⏳ запланировано |
+| 3. Аналитика | Analytics SDK, приём событий, раздел Analytics | ✅ готово |
+| 4. Мониторинг | Серверные проверки (GitHub Actions), uptime, история сбоев, инфраструктура Supabase | ✅ готово |
+| 5. Дополнительно | Users, System Logs, центр уведомлений, настройки, управление администраторами | ✅ готово |
 
-Разделы, которых ещё нет, в интерфейсе явно помечены как «запланировано» — без имитации данных.
+Функции, которых нет (например, push/e-mail-уведомления), в интерфейсе помечены как «запланировано» — без имитации данных.
 
 ## Локальный запуск
 
@@ -27,7 +27,7 @@ npm run dev
 ## Подключение Supabase
 
 1. **Сначала изучите существующую БД** (Table Editor / `\dt public.*`). Миграция только добавляет объекты с префиксом `cc_` и ничего не удаляет и не меняет, но убедитесь, что имена `cc_*` свободны.
-2. Выполните по порядку `supabase/migrations/0001_control_center_init.sql` и `0002_services_maintenance_rpc.sql` в SQL Editor (или через `supabase db push`).
+2. Выполните по порядку `supabase/migrations/0001_control_center_init.sql`, `0002_services_maintenance_rpc.sql`, `0003_analytics.sql` и `0004_monitoring_users_settings.sql` в SQL Editor (или через `supabase db push`).
 3. В **Authentication → Users** создайте пользователя (email + пароль). В **Authentication → Providers → Email** отключите «Allow new users to sign up» — публичной регистрации быть не должно.
 4. Сделайте его администратором (SQL Editor):
    ```sql
@@ -46,7 +46,7 @@ npm run dev
 
 1. Репозиторий `nmchv/control-center`, ветка `main`.
 2. **Settings → Pages → Source: GitHub Actions**.
-3. **Settings → Secrets and variables → Actions**: добавьте `VITE_SUPABASE_URL` и `VITE_SUPABASE_ANON_KEY`.
+3. **Settings → Secrets and variables → Actions**: добавьте `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` и (после выпуска в Settings → Сервисы и мониторинг) `MONITOR_TOKEN`.
 4. DNS: `CNAME admin → nmchv.github.io`. Файл `public/CNAME` уже содержит `admin.nmchv.ru`. После первой публикации включите **Enforce HTTPS**.
 5. Роутинг — HashRouter (`/#/services`), поэтому SPA-fallback для GitHub Pages не нужен.
 
@@ -64,4 +64,4 @@ supabase/migrations                    SQL
 
 ## Подключение сервисов
 
-Новый сервис регистрируется в **Services → Добавить сервис** — код панели менять не нужно. Подключение приложения к странице обслуживания: [docs/connect-service.md](docs/connect-service.md).
+Новый сервис регистрируется в **Services → Добавить сервис** — код панели менять не нужно. Подключение к странице обслуживания: [docs/connect-service.md](docs/connect-service.md). Подключение аналитики: [docs/analytics-sdk.md](docs/analytics-sdk.md). Мониторинг и учёт пользователей: [docs/monitoring.md](docs/monitoring.md).
