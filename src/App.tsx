@@ -14,6 +14,7 @@ import Settings from '@/pages/Settings';
 import Services from '@/pages/Services';
 import Analytics from '@/pages/Analytics';
 import ServiceDetail from '@/pages/ServiceDetail';
+import ResetPassword from '@/pages/ResetPassword';
 
 function ConfigError() {
   return (
@@ -42,6 +43,7 @@ function Gate() {
     );
   }
   if (status === 'signed_out') return <Login />;
+  if (status === 'password_recovery') return <ResetPassword />;
 
   return (
     <Routes>

@@ -7,7 +7,7 @@ export interface AdminInfo {
   role: 'owner' | 'admin';
 }
 
-type Status = 'loading' | 'signed_out' | 'ready';
+type Status = 'loading' | 'signed_out' | 'ready' | 'password_recovery';
 
 interface AuthState {
   status: Status;
@@ -20,6 +20,8 @@ interface AuthState {
 interface AuthContextValue extends AuthState {
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<string | null>;
+  updatePassword: (newPassword: string) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -71,6 +73,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Не вызываем async-запросы Supabase прямо внутри колбэка (риск взаимной блокировки).
       if (event === 'SIGNED_IN') setTimeout(() => void resolve(session, true), 0);
       else if (event === 'SIGNED_OUT') setTimeout(() => void resolve(null, false), 0);
+      else if (event === 'PASSWORD_RECOVERY') {
+        // Пользователь перешёл по ссылке из письма — сессия восстановления активна.
+        // Устанавливаем статус password_recovery, чтобы Gate показал страницу смены пароля.
+        setState((s) => ({ ...s, status: 'password_recovery', user: session?.user ?? null }));
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, [resolve]);
@@ -86,7 +93,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   }, []);
 
-  const value = useMemo(() => ({ ...state, signIn, signOut }), [state, signIn, signOut]);
+  const requestPasswordReset = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://admin.nmchv.ru/#/reset-password',
+    });
+    if (error) return error.message;
+    return null;
+  }, []);
+
+  const updatePassword = useCallback(async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) return error.message;
+    return null;
+  }, []);
+
+  const value = useMemo(
+    () => ({ ...state, signIn, signOut, requestPasswordReset, updatePassword }),
+    [state, signIn, signOut, requestPasswordReset, updatePassword]
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
