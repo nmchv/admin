@@ -95,7 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requestPasswordReset = useCallback(async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://admin.nmchv.ru/reset-password',
+      redirectTo: 'https://admin.nmchv.ru/#/reset-password',
     });
     if (error) return error.message;
     return null;
