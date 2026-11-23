@@ -1,0 +1,11 @@
+diff --git a/index.html b/index.html
+index 8031757..61efc4d 100644
+--- a/index.html
++++ b/index.html
+@@ -1,5 +1,6 @@
+ <!DOCTYPE html>
+ <html lang="ru"><head><meta charset="utf-8">
++<script src="https://admin.nmchv.ru/maintenance.js" data-service="geotrainer"></script>
+ <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+ <title>Геотренажёр</title>
+ <meta name="description" content="Интерактивный тренажёр по географии">

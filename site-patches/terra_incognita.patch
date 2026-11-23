@@ -1,0 +1,12 @@
+diff --git a/index.html b/index.html
+index 33979a6..3dd0112 100644
+--- a/index.html
++++ b/index.html
+@@ -2,6 +2,7 @@
+ <html lang="ru">
+ <head>
+   <meta charset="utf-8">
++<script src="https://admin.nmchv.ru/maintenance.js" data-service="terra_incognita"></script>
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <meta name="description" content="TERRA INCOGNITA — образовательная браузерная игра: исследуйте неизвестную планету и открывайте её территории с помощью географии.">
+   <meta name="theme-color" content="#08131f">

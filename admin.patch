@@ -1,0 +1,1911 @@
+diff --git a/docs/connect-service.md b/docs/connect-service.md
+index c6ea148..e2aee8c 100644
+--- a/docs/connect-service.md
++++ b/docs/connect-service.md
+@@ -21,18 +21,27 @@
+ ### Как это работает
+ 1. До отрисовки скрипт скрывает страницу и вызывает публичную RPC `cc_get_maintenance(slug)`.
+ 2. Если на сервисе (глобально или индивидуально) включено обслуживание — страница полностью заменяется заглушкой **SYSTEM MAINTENANCE** с сообщением и ожидаемым временем восстановления. Сообщение выводится как обычный текст (HTML не интерпретируется).
+-3. Состояние перепроверяется раз в минуту и при возвращении на вкладку. Когда обслуживание снято — страница перезагружается сама.
++3. Состояние перепроверяется каждые 20 секунд и при возвращении на вкладку. Когда обслуживание снято — страница перезагружается сама.
++4. Скрипт сообщает панели, что заглушка подключена (RPC `cc_guard_ping`). Пока сигнала нет, в карточке сервиса и в окнах включения обслуживания показывается предупреждение «Заглушка не подключена».
+ 
+ ### Приоритет
+ Глобальное обслуживание (если сервис не исключён) → индивидуальное → штатная работа.
+ 
++### Что именно закрывается
++- **Интерфейс сайта** — заглушкой (`maintenance.js`). Её нужно подключить на каждом сайте, иначе при нажатии кнопки сайт продолжит открываться.
++- **База данных** — на сервере: миграция `0006` ставит на таблицы сервиса RESTRICTIVE-политику RLS `cc_maintenance_block`. Пока сервис на обслуживании, `anon` и `authenticated` не могут читать и писать его таблицы, даже в обход заглушки. Администраторы панели доступ сохраняют.
++  Таблицы сервисов: `exam_trainer` — `attempts`, `attempt_tasks`, `attempt_answers`, `task_progress`, `task_answer_keys`, `exam_scoring_rules`; `tutor` — `tutor_*`; `geotrainer` — `geotrainer_*`; `forms` — `forms_*`. Общие таблицы аккаунта (`profiles`, `user_settings`, `projects`, `notifications`) не блокируются: вход в аккаунт должен работать всегда.
++- **Портал** — статус проекта в таблице `projects` автоматически переключается на `maintenance` и возвращается к прежнему после снятия режима.
++
+ ### Ограничения (важно)
+-- **Это не защита API.** Скрипт скрывает интерфейс, но прямые запросы к Supabase продолжат работать. Данные защищает RLS и серверные проверки.
+-- **Fail-open:** если проверить состояние не удалось (сеть, Supabase), приложение работает как обычно; скрытие страницы снимается не позже чем через 2,5 с.
+-- Пользователь с отключённым JavaScript заглушку не увидит.
++- **RLS должен быть включён** на таблицах сервиса, иначе политика не ставится (миграция выводит NOTICE со списком таких таблиц).
++- **Запросы через SECURITY DEFINER-функции** (RPC) обходят RLS. Если сайт работает с данными через такие функции, добавьте в них проверку `public.cc_maintenance_gate('slug')`.
++- **Fail-open на первом визите:** если состояние неизвестно (первый визит и Supabase не отвечает), приложение работает как обычно; скрытие страницы снимается не позже чем через 2,5 с. Если сервис был закрыт, а Supabase временно не отвечает, заглушка остаётся (последнее известное состояние хранится до 6 часов).
++- Пользователь с отключённым JavaScript заглушку не увидит (но база закрыта на сервере).
+ - GitHub Pages кэширует `maintenance.js` до 10 минут; само состояние обслуживания запрашивается напрямую из Supabase и кэшу не подвержено.
+ 
+ ## 3. Проверка
+ 1. Включите обслуживание сервиса в Control Center.
+ 2. Откройте приложение — должна появиться заглушка (в течение секунды).
+-3. Выключите обслуживание — страница перезагрузится в течение минуты.
++3. Выключите обслуживание — страница перезагрузится в течение 20 секунд.
++4. В карточке сервиса не должно быть предупреждения «Заглушка не подключена» (после первого визита на сайт).
+diff --git a/public/maintenance.js b/public/maintenance.js
+index 60156af..c252935 100644
+--- a/public/maintenance.js
++++ b/public/maintenance.js
+@@ -8,11 +8,16 @@
+  * Что делает:
+  *  - до отрисовки приложения спрашивает у Supabase (RPC cc_get_maintenance), не на обслуживании ли сервис;
+  *  - если да — полностью заменяет страницу на единую заглушку SYSTEM MAINTENANCE;
+- *  - раз в минуту и при возвращении на вкладку перепроверяет состояние.
++ *  - каждые 20 секунд и при возвращении на вкладку перепроверяет состояние;
++ *  - запоминает последнее известное состояние: если сервис был закрыт, а Supabase
++ *    временно не отвечает, заглушка остаётся (не дольше 6 часов);
++ *  - сообщает панели, что заглушка подключена на сайте (RPC cc_guard_ping).
+  *
+- * Важно: это клиентская проверка. Она скрывает интерфейс, но не защищает API —
+- * для защиты данных используйте RLS и серверные проверки в Supabase.
+- * При недоступности проверки (сеть, Supabase) приложение НЕ блокируется (fail-open).
++ * Важно: это клиентская проверка — она скрывает интерфейс. Данные закрывает
++ * серверная часть: миграция 0006 ставит RLS-политики на таблицы сервисов, поэтому
++ * во время обслуживания БД недоступна пользователям, даже в обход этой страницы.
++ * Если состояние неизвестно (первый визит и Supabase не отвечает) — приложение
++ * НЕ блокируется (fail-open), чтобы сбой проверки не уронил сайт.
+  *
+  * Значения __NMCHV_*__ подставляются при сборке Control Center (публичный anon key).
+  */
+@@ -24,7 +29,9 @@
+   var service = script && script.getAttribute('data-service');
+   if (!service || !/^https?:\/\//.test(CFG.url) || !CFG.key) return;
+ 
+-  var POLL_MS = 60000;
++  var POLL_MS = 20000;
++  var CACHE_KEY = 'nmchv_mt_' + service;
++  var CACHE_TTL_MS = 6 * 3600 * 1000;
+   var FIRST_CHECK_TIMEOUT_MS = 2500;
+   var inMaintenance = false;
+ 
+@@ -37,27 +44,53 @@
+   }
+   var hideTimer = setTimeout(unhide, FIRST_CHECK_TIMEOUT_MS);
+ 
+-  function check() {
+-    return fetch(CFG.url + '/rest/v1/rpc/cc_get_maintenance', {
++  function rpc(name, args) {
++    return fetch(CFG.url + '/rest/v1/rpc/' + name, {
+       method: 'POST',
+       headers: {
+         apikey: CFG.key,
+         Authorization: 'Bearer ' + CFG.key,
+         'Content-Type': 'application/json',
+       },
+-      body: JSON.stringify({ p_slug: service }),
++      body: JSON.stringify(args),
+       cache: 'no-store',
+-    })
++    });
++  }
++
++  function saveCache(state) {
++    try {
++      localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), state: state }));
++    } catch (e) {}
++  }
++  function loadCache() {
++    try {
++      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
++      if (c && c.state && c.state.is_active && Date.now() - c.at < CACHE_TTL_MS) return c.state;
++    } catch (e) {}
++    return null;
++  }
++
++  function check() {
++    return rpc('cc_get_maintenance', { p_slug: service })
+       .then(function (r) {
+         if (!r.ok) throw new Error('http ' + r.status);
+         return r.json();
+       })
+       .then(function (rows) {
+         var row = Array.isArray(rows) ? rows[0] : rows;
+-        return row || { is_active: false };
++        var state = row || { is_active: false };
++        saveCache(state);
++        return state;
+       });
+   }
+ 
++  // Сообщаем панели, что заглушка подключена (не чаще раза в 10 минут — ограничивает сама функция).
++  function ping() {
++    try {
++      rpc('cc_guard_ping', { p_slug: service }).catch(function () {});
++    } catch (e) {}
++  }
++
+   var STYLE =
+     'html,body{margin:0;height:100%;background:#08090B;color:#F4F5F7;font-family:Manrope,"Segoe UI",system-ui,-apple-system,sans-serif}' +
+     '.mt{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;text-align:center;' +
+@@ -160,12 +193,19 @@
+         }
+         if (state.is_active && !inMaintenance) render(state);
+         else if (!state.is_active && inMaintenance) location.reload();
++        // после render: window.stop() внутри него отменил бы уже начатый запрос
++        if (isFirst) ping();
+       },
+       function () {
+-        // fail-open: не удалось проверить — не блокируем приложение
+         if (isFirst) {
+           clearTimeout(hideTimer);
+-          unhide();
++          // сервис был закрыт, а проверить сейчас нельзя — остаёмся на заглушке
++          var known = loadCache();
++          if (known && !inMaintenance) {
++            render(known);
++          } else {
++            unhide(); // состояние неизвестно: fail-open
++          }
+         }
+       }
+     );
+diff --git a/src/App.tsx b/src/App.tsx
+index f9ecc16..8e36535 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -9,6 +9,7 @@ import Login from '@/pages/Login';
+ import Profile from '@/pages/Profile';
+ import Monitoring from '@/pages/Monitoring';
+ import Users from '@/pages/Users';
++import UserDetail from '@/pages/UserDetail';
+ import Logs from '@/pages/Logs';
+ import Settings from '@/pages/Settings';
+ import Services from '@/pages/Services';
+@@ -54,6 +55,7 @@ function Gate() {
+         <Route path="analytics" element={<Analytics />} />
+         <Route path="monitoring" element={<Monitoring />} />
+         <Route path="users" element={<Users />} />
++        <Route path="users/:id" element={<UserDetail />} />
+         <Route path="logs" element={<Logs />} />
+         <Route path="settings" element={<Settings />} />
+         <Route path="profile" element={<Profile />} />
+diff --git a/src/components/services/GlobalMaintenance.tsx b/src/components/services/GlobalMaintenance.tsx
+index 87813a2..5ffda9e 100644
+--- a/src/components/services/GlobalMaintenance.tsx
++++ b/src/components/services/GlobalMaintenance.tsx
+@@ -19,6 +19,7 @@ export function GlobalMaintenance() {
+   // Исключённые из глобального режима сервисы не затрагиваются.
+   const affected = rows.filter((r) => !r.own?.exempt_from_global).length;
+   const exempt = rows.length - affected;
++  const noGuard = rows.filter((r) => !r.own?.exempt_from_global && r.guard === 'missing');
+   const formError = dialog === 'enable' ? validateMaintenance(message, until) : null;
+ 
+   const close = () => {
+@@ -92,11 +93,21 @@ export function GlobalMaintenance() {
+           <div className="flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
+             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+             <p>
+-              Все приложения будут заменены страницей «Ведутся технические работы» и станут недоступны пользователям до
+-              снятия режима. Будет затронуто сервисов: <b>{affected}</b>
++              Все приложения будут заменены страницей «Ведутся технические работы», а их таблицы в базе данных закроются для
++              пользователей до снятия режима. Будет затронуто сервисов: <b>{affected}</b>
+               {exempt > 0 && ` (ещё ${exempt} исключено из глобального режима)`}.
+             </p>
+           </div>
++          {noGuard.length > 0 && (
++            <div className="flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
++              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
++              <p>
++                Страница-заглушка не подтверждена на сайтах: <b>{noGuard.map((r) => r.service.name).join(', ')}</b>. Их базы
++                данных закроются, но сами сайты продолжат открываться, пока на них не подключён{' '}
++                <code className="text-fg">maintenance.js</code>.
++              </p>
++            </div>
++          )}
+           <MaintenanceFields message={message} until={until} onMessage={setMessage} onUntil={setUntil} disabled={busy} />
+           {formError && <p className="text-xs text-bad">{formError}</p>}
+         </ConfirmDialog>
+diff --git a/src/components/services/ServiceCard.tsx b/src/components/services/ServiceCard.tsx
+index 4daaf73..1544b06 100644
+--- a/src/components/services/ServiceCard.tsx
++++ b/src/components/services/ServiceCard.tsx
+@@ -1,5 +1,5 @@
+ import { Link } from 'react-router-dom';
+-import { ExternalLink, Github, Server, Users } from 'lucide-react';
++import { ExternalLink, Github, Server, TriangleAlert, Users } from 'lucide-react';
+ import { StatusBadge } from '@/components/ui/StatusBadge';
+ import { formatNumber, formatRelative } from '@/utils/format';
+ import type { ServiceRow } from '@/types';
+@@ -25,6 +25,16 @@ export function ServiceCard({ row }: { row: ServiceRow }) {
+         <StatusBadge status={status} />
+       </div>
+ 
++      {row.guard === 'missing' && (
++        <p
++          className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs leading-snug text-warn"
++          title="За последние 7 дней ни один посетитель не загрузил страницу с подключённой заглушкой maintenance.js"
++        >
++          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
++          Заглушка не подключена: на сайте режим обслуживания ничего не покажет
++        </p>
++      )}
++
+       {maintenance && (
+         <p className="rounded-lg bg-maint/10 px-3 py-2 text-xs leading-snug text-maint">
+           {maintenance.source === 'global' ? 'Глобальное обслуживание' : 'Индивидуальное обслуживание'}
+diff --git a/src/components/users/AllUserData.tsx b/src/components/users/AllUserData.tsx
+new file mode 100644
+index 0000000..cceff66
+--- /dev/null
++++ b/src/components/users/AllUserData.tsx
+@@ -0,0 +1,166 @@
++import { useState } from 'react';
++import { Braces, ChevronDown, ChevronLeft, ChevronRight, Table2 } from 'lucide-react';
++import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States';
++import { useAsync } from '@/hooks/useAsync';
++import { fetchUserTableRows, fetchUserTables } from '@/lib/supabase/api';
++import { formatNumber } from '@/utils/format';
++import type { UserTableInfo } from '@/types';
++import { formatCell } from './dataFormat';
++
++const PAGE = 50;
++
++function TableBlock({ userId, info }: { userId: string; info: UserTableInfo }) {
++  const [open, setOpen] = useState(false);
++  const [json, setJson] = useState(false);
++  const [page, setPage] = useState(0);
++  const data = useAsync(
++    () => (open ? fetchUserTableRows(userId, info.tbl, PAGE, page * PAGE) : Promise.resolve(null)),
++    [open, page, userId, info.tbl],
++  );
++
++  const rows = data.data?.rows ?? [];
++  const columns = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
++  const pages = Math.max(1, Math.ceil(info.row_count / PAGE));
++
++  return (
++    <div className="border-b border-line last:border-b-0">
++      <button
++        className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-elevated/50"
++        onClick={() => setOpen((o) => !o)}
++        aria-expanded={open}
++      >
++        <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${open ? '' : '-rotate-90'}`} />
++        <code className="text-sm font-semibold">{info.tbl}</code>
++        {info.depth > 0 && <span className="text-xs text-muted">через {info.via}</span>}
++        <span className="ml-auto rounded-full bg-elevated px-2.5 py-0.5 text-xs font-bold tabular-nums text-muted">
++          {formatNumber(info.row_count)}
++        </span>
++      </button>
++
++      {open && (
++        <div className="border-t border-line bg-bg/40">
++          {data.error ? (
++            <ErrorState message={data.error} onRetry={data.reload} />
++          ) : data.loading && !data.data ? (
++            <div className="p-4">
++              <Skeleton className="h-24" />
++            </div>
++          ) : (
++            <>
++              <div className="flex items-center justify-between gap-3 px-5 py-2 text-xs text-muted">
++                <span>
++                  {data.data && data.data.hidden_columns.length > 0
++                    ? `Скрыты защитные поля: ${data.data.hidden_columns.join(', ')}`
++                    : 'Показаны все поля'}
++                </span>
++                <button className="btn !px-2.5 !py-1 !text-xs" onClick={() => setJson((j) => !j)}>
++                  {json ? <Table2 className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
++                  {json ? 'Таблица' : 'JSON'}
++                </button>
++              </div>
++
++              {json ? (
++                <pre className="max-h-[420px] overflow-auto px-5 pb-4 text-xs leading-relaxed text-muted">
++                  {JSON.stringify(rows, null, 2)}
++                </pre>
++              ) : (
++                <div className={`max-h-[420px] overflow-auto ${data.loading ? 'opacity-60' : ''}`}>
++                  <table className="w-full text-left text-xs">
++                    <thead className="sticky top-0 bg-surface text-muted">
++                      <tr>
++                        {columns.map((c) => (
++                          <th key={c} className="whitespace-nowrap border-b border-line px-3 py-2 font-semibold">
++                            {c}
++                          </th>
++                        ))}
++                      </tr>
++                    </thead>
++                    <tbody className="divide-y divide-line">
++                      {rows.map((r, i) => (
++                        <tr key={i} className="align-top">
++                          {columns.map((c) => (
++                            <td key={c} className="max-w-[320px] break-words px-3 py-2" title={formatCell(r[c])}>
++                              <span className="line-clamp-3">{formatCell(r[c])}</span>
++                            </td>
++                          ))}
++                        </tr>
++                      ))}
++                    </tbody>
++                  </table>
++                </div>
++              )}
++
++              {info.row_count > PAGE && (
++                <div className="flex items-center justify-between px-5 py-2 text-xs text-muted">
++                  <span>
++                    Страница {page + 1} из {pages}
++                  </span>
++                  <div className="flex gap-2">
++                    <button className="btn !px-2 !py-1" disabled={page === 0 || data.loading} onClick={() => setPage((p) => p - 1)} aria-label="Назад">
++                      <ChevronLeft className="h-4 w-4" />
++                    </button>
++                    <button className="btn !px-2 !py-1" disabled={page + 1 >= pages || data.loading} onClick={() => setPage((p) => p + 1)} aria-label="Вперёд">
++                      <ChevronRight className="h-4 w-4" />
++                    </button>
++                  </div>
++                </div>
++              )}
++            </>
++          )}
++        </div>
++      )}
++    </div>
++  );
++}
++
++/**
++ * Все строки пользователя из всех таблиц БД. Список таблиц определяется на сервере автоматически,
++ * поэтому новые таблицы и колонки появляются здесь сами.
++ */
++export function AllUserData({ userId }: { userId: string }) {
++  const tables = useAsync(() => fetchUserTables(userId), [userId]);
++  const [showEmpty, setShowEmpty] = useState(false);
++
++  const all = tables.data ?? [];
++  const filled = all.filter((t) => t.row_count > 0);
++  const visible = showEmpty ? all : filled;
++  const totalRows = filled.reduce((s, t) => s + t.row_count, 0);
++
++  return (
++    <section className="card overflow-hidden">
++      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5">
++        <div>
++          <h2 className="text-sm font-extrabold tracking-tight">Все данные в базе</h2>
++          {tables.data && (
++            <p className="mt-0.5 text-xs text-muted">
++              Таблиц с данными: {filled.length} из {all.length} · строк: {formatNumber(totalRows)}
++            </p>
++          )}
++        </div>
++        <label className="flex items-center gap-2 text-xs font-semibold text-muted">
++          <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} />
++          Показывать пустые таблицы
++        </label>
++      </div>
++
++      {tables.error ? (
++        <ErrorState
++          message={`${tables.error}. Если ошибка про функцию cc_user_tables — примените миграцию 0005 в Supabase.`}
++          onRetry={tables.reload}
++        />
++      ) : tables.loading ? (
++        <div className="p-4">
++          <Skeleton className="h-32" />
++        </div>
++      ) : visible.length === 0 ? (
++        <EmptyState title="Данных в таблицах нет" hint="У пользователя пока нет ни одной строки в связанных таблицах." />
++      ) : (
++        <div>
++          {visible.map((t) => (
++            <TableBlock key={t.tbl} userId={userId} info={t} />
++          ))}
++        </div>
++      )}
++    </section>
++  );
++}
+diff --git a/src/components/users/UsersTable.tsx b/src/components/users/UsersTable.tsx
+new file mode 100644
+index 0000000..da65ea7
+--- /dev/null
++++ b/src/components/users/UsersTable.tsx
+@@ -0,0 +1,164 @@
++import { useEffect, useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { Ban, ChevronLeft, ChevronRight, Search, ShieldCheck } from 'lucide-react';
++import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States';
++import { useAsync } from '@/hooks/useAsync';
++import { fetchUsersList } from '@/lib/supabase/api';
++import { formatFullDateTime, formatNumber, formatRelative } from '@/utils/format';
++
++const PAGE = 25;
++
++const SORTS: { value: string; label: string }[] = [
++  { value: 'created_desc', label: 'Сначала новые' },
++  { value: 'created_asc', label: 'Сначала старые' },
++  { value: 'seen_desc', label: 'По последнему входу' },
++  { value: 'email_asc', label: 'По e-mail' },
++];
++
++/** Список всех пользователей с поиском. Клик по строке открывает полную карточку. */
++export function UsersTable() {
++  const navigate = useNavigate();
++  const [q, setQ] = useState('');
++  const [debounced, setDebounced] = useState('');
++  const [sort, setSort] = useState('created_desc');
++  const [page, setPage] = useState(0);
++
++  useEffect(() => {
++    const t = setTimeout(() => {
++      setDebounced(q);
++      setPage(0);
++    }, 300);
++    return () => clearTimeout(t);
++  }, [q]);
++
++  const list = useAsync(
++    () => fetchUsersList({ q: debounced, limit: PAGE, offset: page * PAGE, sort }),
++    [debounced, sort, page],
++  );
++
++  const rows = list.data ?? [];
++  const total = rows[0]?.total ?? 0;
++  const pages = Math.max(1, Math.ceil(total / PAGE));
++
++  return (
++    <section className="card overflow-hidden">
++      <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-3.5">
++        <h2 className="mr-auto text-sm font-extrabold tracking-tight">
++          Пользователи{list.data ? <span className="ml-2 font-semibold text-muted">{formatNumber(total)}</span> : null}
++        </h2>
++        <label className="relative w-full sm:w-72">
++          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
++          <input
++            className="input !pl-9"
++            placeholder="E-mail, телефон, имя, логин или ID"
++            value={q}
++            onChange={(e) => setQ(e.target.value)}
++          />
++        </label>
++        <select
++          className="input !w-auto"
++          value={sort}
++          onChange={(e) => {
++            setSort(e.target.value);
++            setPage(0);
++          }}
++          aria-label="Сортировка"
++        >
++          {SORTS.map((s) => (
++            <option key={s.value} value={s.value}>
++              {s.label}
++            </option>
++          ))}
++        </select>
++      </div>
++
++      {list.error ? (
++        <ErrorState
++          message={`${list.error}. Если ошибка про функцию cc_users_list — примените миграцию 0005 в Supabase.`}
++          onRetry={list.reload}
++        />
++      ) : list.loading && !list.data ? (
++        <div className="p-4">
++          <Skeleton className="h-40" />
++        </div>
++      ) : rows.length === 0 ? (
++        <EmptyState title={debounced ? 'Никого не нашли' : 'Пользователей пока нет'} hint={debounced ? 'Попробуйте другой запрос.' : undefined} />
++      ) : (
++        <div className={`overflow-x-auto ${list.loading ? 'opacity-60' : ''}`}>
++          <table className="w-full min-w-[760px] text-left text-sm">
++            <thead className="text-xs text-muted">
++              <tr className="border-b border-line">
++                <th className="px-5 py-2.5 font-semibold">Пользователь</th>
++                <th className="px-4 py-2.5 font-semibold">Телефон</th>
++                <th className="px-4 py-2.5 font-semibold">Сервисы</th>
++                <th className="px-4 py-2.5 font-semibold">Регистрация</th>
++                <th className="px-5 py-2.5 font-semibold">Последний вход</th>
++              </tr>
++            </thead>
++            <tbody className="divide-y divide-line">
++              {rows.map((u) => (
++                <tr
++                  key={u.user_id}
++                  tabIndex={0}
++                  className="cursor-pointer transition-colors hover:bg-elevated/60 focus-visible:bg-elevated/60 focus-visible:outline-none"
++                  onClick={() => navigate(`/users/${u.user_id}`)}
++                  onKeyDown={(e) => e.key === 'Enter' && navigate(`/users/${u.user_id}`)}
++                >
++                  <td className="px-5 py-3">
++                    <div className="flex items-center gap-3">
++                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-line bg-elevated text-xs font-extrabold text-accent">
++                        {(u.display_name || u.email || '?').charAt(0).toUpperCase()}
++                      </span>
++                      <div className="min-w-0">
++                        <div className="flex items-center gap-1.5 font-semibold">
++                          <span className="truncate">{u.display_name || u.username || u.email || 'Без имени'}</span>
++                          {u.is_admin && <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="Администратор" />}
++                          {u.is_banned && <Ban className="h-3.5 w-3.5 shrink-0 text-bad" aria-label="Заблокирован" />}
++                        </div>
++                        <div className="truncate text-xs text-muted">{u.email ?? '—'}</div>
++                      </div>
++                    </div>
++                  </td>
++                  <td className="whitespace-nowrap px-4 py-3 text-muted">{u.phone ?? '—'}</td>
++                  <td className="px-4 py-3">
++                    {u.services.length === 0 ? (
++                      <span className="text-muted">—</span>
++                    ) : (
++                      <div className="flex flex-wrap gap-1">
++                        {u.services.map((s) => (
++                          <span key={s} className="rounded-full bg-elevated px-2 py-0.5 text-xs font-semibold text-muted">
++                            {s}
++                          </span>
++                        ))}
++                      </div>
++                    )}
++                  </td>
++                  <td className="whitespace-nowrap px-4 py-3 text-muted">{formatFullDateTime(u.created_at)}</td>
++                  <td className="whitespace-nowrap px-5 py-3 text-muted">
++                    {u.last_sign_in_at ? formatRelative(u.last_sign_in_at) : 'не входил'}
++                  </td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++      )}
++
++      {total > PAGE && (
++        <div className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
++          <span>
++            Страница {page + 1} из {pages}
++          </span>
++          <div className="flex gap-2">
++            <button className="btn !px-2.5 !py-1.5" disabled={page === 0 || list.loading} onClick={() => setPage((p) => p - 1)} aria-label="Назад">
++              <ChevronLeft className="h-4 w-4" />
++            </button>
++            <button className="btn !px-2.5 !py-1.5" disabled={page + 1 >= pages || list.loading} onClick={() => setPage((p) => p + 1)} aria-label="Вперёд">
++              <ChevronRight className="h-4 w-4" />
++            </button>
++          </div>
++        </div>
++      )}
++    </section>
++  );
++}
+diff --git a/src/components/users/dataFormat.ts b/src/components/users/dataFormat.ts
+new file mode 100644
+index 0000000..9bcaa40
+--- /dev/null
++++ b/src/components/users/dataFormat.ts
+@@ -0,0 +1,49 @@
++const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
++
++/** Подписи известных полей; остальные показываются под своим именем из БД. */
++export const FIELD_LABELS: Record<string, string> = {
++  id: 'ID',
++  email: 'E-mail',
++  phone: 'Телефон',
++  name: 'Имя',
++  full_name: 'Полное имя',
++  first_name: 'Имя',
++  last_name: 'Фамилия',
++  display_name: 'Отображаемое имя',
++  username: 'Логин',
++  age: 'Возраст',
++  birthday: 'Дата рождения',
++  birth_date: 'Дата рождения',
++  city: 'Город',
++  school: 'Школа',
++  grade: 'Класс',
++  bio: 'О себе',
++  avatar_url: 'Аватар',
++  timezone: 'Часовой пояс',
++  preferred_language: 'Язык',
++  created_at: 'Создан',
++  updated_at: 'Изменён',
++};
++
++export const labelOf = (key: string): string => FIELD_LABELS[key] ?? key;
++
++export function isIso(v: unknown): v is string {
++  return typeof v === 'string' && ISO.test(v);
++}
++
++const dt = new Intl.DateTimeFormat('ru-RU', {
++  day: '2-digit',
++  month: '2-digit',
++  year: 'numeric',
++  hour: '2-digit',
++  minute: '2-digit',
++});
++
++/** Значение ячейки → текст. Объекты и массивы — компактный JSON без потери данных. */
++export function formatCell(v: unknown): string {
++  if (v === null || v === undefined || v === '') return '—';
++  if (typeof v === 'boolean') return v ? 'да' : 'нет';
++  if (isIso(v)) return dt.format(new Date(v));
++  if (typeof v === 'object') return JSON.stringify(v);
++  return String(v);
++}
+diff --git a/src/lib/ServicesProvider.tsx b/src/lib/ServicesProvider.tsx
+index 9da5529..38e722c 100644
+--- a/src/lib/ServicesProvider.tsx
++++ b/src/lib/ServicesProvider.tsx
+@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
+ import { useAsync } from '@/hooks/useAsync';
+ import { useSettings } from '@/lib/SettingsProvider';
+ import {
++  fetchGuardStatus,
+   fetchLatestHealth,
+   fetchMaintenance,
+   fetchServices,
+@@ -37,6 +38,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
+     [],
+   );
+   const visitors = useAsync(fetchVisitors24h, []);
++  const guard = useAsync(fetchGuardStatus, []);
+ 
+   const settings = useSettings();
+   const staleAfterMs = Math.max(settings.get('monitoring.interval_minutes') * 3, 15) * 60_000;
+@@ -44,9 +46,9 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
+   const rows = useMemo(
+     () =>
+       core.data
+-        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {}, staleAfterMs)
++        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {}, staleAfterMs, guard.error || guard.loading ? null : guard.data ?? {})
+         : [],
+-    [core.data, visitors.data, staleAfterMs],
++    [core.data, visitors.data, staleAfterMs, guard.data, guard.error, guard.loading],
+   );
+ 
+   const value: ServicesContextValue = {
+@@ -58,6 +60,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
+     reload: () => {
+       core.reload();
+       visitors.reload();
++      guard.reload();
+     },
+   };
+   return <ServicesContext.Provider value={value}>{children}</ServicesContext.Provider>;
+diff --git a/src/lib/supabase/api.ts b/src/lib/supabase/api.ts
+index 2cc6e64..046f4ed 100644
+--- a/src/lib/supabase/api.ts
++++ b/src/lib/supabase/api.ts
+@@ -20,6 +20,11 @@ import type {
+   MaintenanceRow,
+   SeriesPoint,
+   Service,
++  UserCharts,
++  UserListRow,
++  UserOverview,
++  UserTableInfo,
++  UserTableRows,
+ } from '@/types';
+ 
+ function unwrap<T>(res: { data: T | null; error: { message: string } | null }): T {
+@@ -184,6 +189,54 @@ export async function fetchHealthSeries(serviceId: string, hours = 24): Promise<
+ 
+ // ---------- пользователи ----------
+ 
++export async function fetchUsersList(a: {
++  q: string;
++  limit: number;
++  offset: number;
++  sort: string;
++}): Promise<UserListRow[]> {
++  const rows = unwrap<UserListRow[]>(
++    await supabase.rpc('cc_users_list', {
++      p_q: a.q.trim() || null,
++      p_limit: a.limit,
++      p_offset: a.offset,
++      p_sort: a.sort,
++    }),
++  );
++  return rows.map((r) => ({ ...r, total: Number(r.total) }));
++}
++
++/** Открытие карточки пишется в журнал действий администратора (на сервере). */
++export async function fetchUserOverview(userId: string): Promise<UserOverview> {
++  return unwrap<UserOverview>(await supabase.rpc('cc_user_overview', { p_user: userId }));
++}
++
++export async function fetchUserCharts(userId: string, days: number, tz: string): Promise<UserCharts> {
++  return unwrap<UserCharts>(await supabase.rpc('cc_user_charts', { p_user: userId, p_days: days, p_tz: tz }));
++}
++
++export async function fetchUserTables(userId: string): Promise<UserTableInfo[]> {
++  const rows = unwrap<UserTableInfo[]>(await supabase.rpc('cc_user_tables', { p_user: userId }));
++  return rows.map((r) => ({ ...r, row_count: Number(r.row_count) }));
++}
++
++export async function fetchUserTableRows(
++  userId: string,
++  table: string,
++  limit: number,
++  offset: number,
++): Promise<UserTableRows> {
++  return unwrap<UserTableRows>(
++    await supabase.rpc('cc_user_table_rows', { p_user: userId, p_table: table, p_limit: limit, p_offset: offset }),
++  );
++}
++
++/** service_id → время последнего визита с подключённой заглушкой. */
++export async function fetchGuardStatus(): Promise<Record<string, string>> {
++  const rows = unwrap<{ service_id: string; guard_seen_at: string }[]>(await supabase.rpc('cc_guard_status'));
++  return Object.fromEntries(rows.map((r) => [r.service_id, r.guard_seen_at]));
++}
++
+ export async function fetchUsersSummary(): Promise<UsersSummary> {
+   const r = unwrap<Record<string, unknown>[]>(await supabase.rpc('cc_users_summary'))[0] ?? {};
+   return {
+diff --git a/src/pages/ServiceDetail.tsx b/src/pages/ServiceDetail.tsx
+index ed26857..fbfde12 100644
+--- a/src/pages/ServiceDetail.tsx
++++ b/src/pages/ServiceDetail.tsx
+@@ -200,6 +200,18 @@ export default function ServiceDetail() {
+           </div>
+         </div>
+ 
++        {row?.guard === 'missing' && (
++          <div className="mb-4 flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
++            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
++            <p>
++              На сайте не подтверждена страница-заглушка: за последние 7 дней ни один посетитель не загрузил её. Режим
++              обслуживания закроет базу данных сервиса, но сам сайт продолжит открываться. Подключите{' '}
++              <code className="text-fg">maintenance.js</code> на сайте (docs/connect-service.md): первым скриптом в{' '}
++              <code className="text-fg">&lt;head&gt;</code> с <code className="text-fg">data-service=&quot;{service.slug}&quot;</code>.
++            </p>
++          </div>
++        )}
++
+         {underGlobal && (
+           <div className="mb-4 flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
+             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+@@ -289,7 +301,8 @@ export default function ServiceDetail() {
+           onClose={() => !busy && setConfirm(null)}
+         >
+           <p className="text-sm leading-relaxed text-muted">
+-            Пользователи увидят страницу «Ведутся технические работы» вместо приложения.
++            Пользователи увидят страницу «Ведутся технические работы» вместо приложения, а таблицы сервиса в базе данных
++            станут недоступны для чтения и записи до снятия режима. Администраторы панели сохраняют доступ.
+             {message.trim() && (
+               <>
+                 {' '}
+diff --git a/src/pages/UserDetail.tsx b/src/pages/UserDetail.tsx
+new file mode 100644
+index 0000000..1f0e2bd
+--- /dev/null
++++ b/src/pages/UserDetail.tsx
+@@ -0,0 +1,330 @@
++import { useMemo, useState, type ReactNode } from 'react';
++import { Link, useParams } from 'react-router-dom';
++import {
++  Bar,
++  BarChart,
++  CartesianGrid,
++  Legend,
++  Line,
++  LineChart,
++  ResponsiveContainer,
++  Tooltip,
++  XAxis,
++  YAxis,
++} from 'recharts';
++import { ArrowLeft, Award, Ban, ClipboardCheck, Clock, ListChecks, MousePointerClick, ShieldCheck, Target } from 'lucide-react';
++import { StatCard } from '@/components/dashboard/StatCard';
++import { AllUserData } from '@/components/users/AllUserData';
++import { formatCell, isIso, labelOf } from '@/components/users/dataFormat';
++import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States';
++import { useAsync } from '@/hooks/useAsync';
++import { useSettings } from '@/lib/SettingsProvider';
++import { fetchUserCharts, fetchUserOverview } from '@/lib/supabase/api';
++import { formatNumber, formatRelative } from '@/utils/format';
++import type { UserCharts } from '@/types';
++
++const TOOLTIP = { background: '#161A21', border: '1px solid #252A34', borderRadius: 12, fontSize: 12 } as const;
++const AXIS = { stroke: '#9299A7', fontSize: 11, tickLine: false, axisLine: false } as const;
++const PERIODS = [
++  { days: 30, label: '30 дней' },
++  { days: 90, label: '90 дней' },
++  { days: 365, label: 'Год' },
++];
++
++function Kv({ rows }: { rows: [string, ReactNode][] }) {
++  return (
++    <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
++      {rows.map(([k, v]) => (
++        <div key={k} className="min-w-0">
++          <dt className="text-xs font-semibold text-muted">{k}</dt>
++          <dd className="mt-0.5 break-words text-sm">{v}</dd>
++        </div>
++      ))}
++    </dl>
++  );
++}
++
++function ChartCard({ title, children, empty }: { title: string; children: ReactNode; empty: boolean }) {
++  return (
++    <section className="card p-4 sm:p-5">
++      <h3 className="mb-3 text-sm font-extrabold tracking-tight">{title}</h3>
++      <div className="h-56">
++        {empty ? <EmptyState title="Данных за период нет" /> : children}
++      </div>
++    </section>
++  );
++}
++
++/** Дни без активности тоже должны быть на оси: заполняем нулями. */
++function fillDays(data: UserCharts['activity'], days: number, tz: string) {
++  const fmt = (d: Date) => {
++    try {
++      return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
++    } catch {
++      return new Intl.DateTimeFormat('en-CA').format(d);
++    }
++  };
++  const byDay = new Map(data.map((d) => [d.day, Number(d.n)]));
++  const out: { day: string; label: string; n: number }[] = [];
++  for (let i = days - 1; i >= 0; i--) {
++    const day = fmt(new Date(Date.now() - i * 86_400_000));
++    out.push({ day, label: `${day.slice(8, 10)}.${day.slice(5, 7)}`, n: byDay.get(day) ?? 0 });
++  }
++  return out;
++}
++
++export default function UserDetail() {
++  const { id = '' } = useParams();
++  const settings = useSettings();
++  const tz = settings.get('general.timezone');
++  const [days, setDays] = useState(90);
++
++  const overview = useAsync(() => fetchUserOverview(id), [id]);
++  const charts = useAsync(() => fetchUserCharts(id, days, tz), [id, days, tz]);
++
++  const c = charts.data;
++  const activity = useMemo(() => (c ? fillDays(c.activity, Math.min(days, 365), tz) : []), [c, days, tz]);
++  const attempts = (c?.attempts ?? []).map((a) => ({
++    ...a,
++    label: new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(new Date(a.at)),
++    pct: a.percentage === null ? null : Number(a.percentage),
++  }));
++  const progress = (c?.progress ?? []).map((p) => ({
++    exam: p.exam_id,
++    'Верных': Number(p.correct),
++    'Попыток': Number(p.attempts),
++  }));
++
++  const o = overview.data;
++  const a = o?.auth;
++  const title = (o?.profile?.display_name as string) || (o?.profile?.username as string) || a?.email || 'Пользователь';
++
++  return (
++    <div className="space-y-6">
++      <Link to="/users" className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted hover:text-fg">
++        <ArrowLeft className="h-3.5 w-3.5" /> Все пользователи
++      </Link>
++
++      {overview.error ? (
++        <div className="card">
++          <ErrorState
++            message={`${overview.error}. Если ошибка про функцию cc_user_overview — примените миграцию 0005 в Supabase.`}
++            onRetry={overview.reload}
++          />
++        </div>
++      ) : overview.loading || !o || !a ? (
++        <Skeleton className="h-56" />
++      ) : (
++        <section className="card p-5">
++          <div className="mb-5 flex flex-wrap items-center gap-4">
++            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-line bg-elevated text-xl font-extrabold text-accent">
++              {title.charAt(0).toUpperCase()}
++            </span>
++            <div className="min-w-0 flex-1">
++              <h2 className="truncate text-lg font-extrabold tracking-tight">{title}</h2>
++              <p className="truncate text-sm text-muted">{a.email ?? a.phone ?? a.id}</p>
++            </div>
++            <div className="flex flex-wrap gap-2">
++              {o.is_admin && (
++                <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
++                  <ShieldCheck className="h-3.5 w-3.5" /> Администратор
++                </span>
++              )}
++              {a.banned_until && new Date(a.banned_until) > new Date() && (
++                <span className="inline-flex items-center gap-1.5 rounded-full bg-bad/10 px-2.5 py-1 text-xs font-semibold text-bad">
++                  <Ban className="h-3.5 w-3.5" /> Заблокирован
++                </span>
++              )}
++              {a.is_anonymous && <span className="rounded-full bg-elevated px-2.5 py-1 text-xs font-semibold text-muted">Анонимный</span>}
++            </div>
++          </div>
++
++          <div className="grid gap-6 lg:grid-cols-2">
++            <div>
++              <h3 className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted">Аккаунт</h3>
++              <Kv
++                rows={[
++                  ['E-mail', a.email ?? '—'],
++                  ['E-mail подтверждён', a.email_confirmed_at ? formatCell(a.email_confirmed_at) : 'нет'],
++                  ['Телефон', a.phone ?? '—'],
++                  ['Телефон подтверждён', a.phone_confirmed_at ? formatCell(a.phone_confirmed_at) : 'нет'],
++                  ['Регистрация', formatCell(a.created_at)],
++                  ['Последний вход', a.last_sign_in_at ? `${formatCell(a.last_sign_in_at)} (${formatRelative(a.last_sign_in_at)})` : 'не входил'],
++                  ['Способы входа', a.providers?.join(', ') || '—'],
++                  ['ID', <code key="id" className="text-xs">{a.id}</code>],
++                ]}
++              />
++            </div>
++            <div>
++              <h3 className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted">Профиль и дополнительные данные</h3>
++              {Object.keys(o.profile ?? {}).length + Object.keys(a.user_metadata).length === 0 ? (
++                <p className="text-sm text-muted">Профиль не заполнен.</p>
++              ) : (
++                <Kv
++                  rows={[
++                    ...Object.entries(o.profile ?? {})
++                      .filter(([k]) => k !== 'id')
++                      .map(([k, v]): [string, ReactNode] => [labelOf(k), formatCell(v)]),
++                    ...Object.entries(a.user_metadata).map(([k, v]): [string, ReactNode] => [
++                      labelOf(k),
++                      isIso(v) ? formatCell(v) : formatCell(v),
++                    ]),
++                  ]}
++                />
++              )}
++            </div>
++          </div>
++
++          <div className="mt-6 border-t border-line pt-4">
++            <h3 className="mb-2 text-xs font-extrabold uppercase tracking-wide text-muted">Доступ к сервисам</h3>
++            {o.projects.length === 0 ? (
++              <p className="text-sm text-muted">Нет записей о доступе.</p>
++            ) : (
++              <div className="flex flex-wrap gap-2">
++                {o.projects.map((p) => (
++                  <span
++                    key={p.slug}
++                    className={`rounded-xl border px-3 py-1.5 text-xs ${p.is_active ? 'border-line bg-elevated' : 'border-line opacity-50'}`}
++                    title={`С ${formatCell(p.since)}${p.expires_at ? ` до ${formatCell(p.expires_at)}` : ''}`}
++                  >
++                    <b>{p.name}</b> <span className="text-muted">· {p.access_level}{p.is_active ? '' : ' · отключён'}</span>
++                  </span>
++                ))}
++              </div>
++            )}
++          </div>
++        </section>
++      )}
++
++      <div className="flex items-center justify-between gap-3">
++        <h2 className="text-sm font-extrabold tracking-tight">Активность и результаты</h2>
++        <div className="flex gap-1.5">
++          {PERIODS.map((p) => (
++            <button
++              key={p.days}
++              className={`btn !px-3 !py-1.5 !text-xs ${days === p.days ? '!border-accent/60 !text-accent' : ''}`}
++              onClick={() => setDays(p.days)}
++            >
++              {p.label}
++            </button>
++          ))}
++        </div>
++      </div>
++
++      {charts.error ? (
++        <div className="card">
++          <ErrorState
++            message={`${charts.error}. Если ошибка про функцию cc_user_charts — примените миграцию 0005 в Supabase.`}
++            onRetry={charts.reload}
++          />
++        </div>
++      ) : (
++        <>
++          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
++            <StatCard label="Попыток" value={c ? formatNumber(c.totals.attempts) : null} icon={ClipboardCheck} loading={charts.loading} hint={c ? `Завершено: ${c.totals.attempts_done}` : undefined} />
++            <StatCard label="Средний балл" value={c ? (c.totals.avg_percentage === null ? '—' : `${c.totals.avg_percentage}%`) : null} icon={Target} loading={charts.loading} />
++            <StatCard label="Лучший балл" value={c ? (c.totals.best_percentage === null ? '—' : `${c.totals.best_percentage}%`) : null} icon={Award} loading={charts.loading} />
++            <StatCard label="События" value={c ? formatNumber(c.totals.events) : null} icon={MousePointerClick} loading={charts.loading} />
++            <StatCard label="Достижения / цели" value={c ? `${c.totals.achievements} / ${c.totals.goals}` : null} icon={ListChecks} loading={charts.loading} />
++            <StatCard label="Активность" value={c ? (c.totals.last_activity ? formatRelative(c.totals.last_activity) : '—') : null} icon={Clock} loading={charts.loading} hint="Последнее действие" />
++          </div>
++
++          <div className="grid gap-4 lg:grid-cols-2">
++            <ChartCard title="Активность по дням" empty={!charts.loading && !activity.some((d) => d.n > 0)}>
++              {charts.loading ? (
++                <Skeleton className="h-full w-full" />
++              ) : (
++                <ResponsiveContainer width="100%" height="100%">
++                  <BarChart data={activity} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
++                    <CartesianGrid stroke="#252A34" strokeDasharray="3 6" vertical={false} />
++                    <XAxis dataKey="label" {...AXIS} minTickGap={28} />
++                    <YAxis {...AXIS} allowDecimals={false} />
++                    <Tooltip cursor={{ fill: '#ffffff08' }} contentStyle={TOOLTIP} formatter={(v: number) => [v, 'Действий']} labelFormatter={(l) => `Дата: ${l}`} />
++                    <Bar dataKey="n" fill="#5B8DEF" radius={[3, 3, 0, 0]} />
++                  </BarChart>
++                </ResponsiveContainer>
++              )}
++            </ChartCard>
++
++            <ChartCard title="Результаты попыток, %" empty={!charts.loading && attempts.length === 0}>
++              {charts.loading ? (
++                <Skeleton className="h-full w-full" />
++              ) : (
++                <ResponsiveContainer width="100%" height="100%">
++                  <LineChart data={attempts} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
++                    <CartesianGrid stroke="#252A34" strokeDasharray="3 6" vertical={false} />
++                    <XAxis dataKey="label" {...AXIS} minTickGap={24} />
++                    <YAxis {...AXIS} domain={[0, 100]} />
++                    <Tooltip
++                      contentStyle={TOOLTIP}
++                      formatter={(v: number) => [`${v}%`, 'Результат']}
++                      labelFormatter={(_l, p) => {
++                        const d = p?.[0]?.payload as (typeof attempts)[number] | undefined;
++                        return d ? `${d.exam_id} · ${d.mode} · ${d.score ?? '—'}/${d.max_score ?? '—'}` : '';
++                      }}
++                    />
++                    <Line type="monotone" dataKey="pct" stroke="#3DBE7A" strokeWidth={2} dot={{ r: 3 }} connectNulls />
++                  </LineChart>
++                </ResponsiveContainer>
++              )}
++            </ChartCard>
++
++            <ChartCard title="События по сервисам" empty={!charts.loading && (c?.by_project.length ?? 0) === 0}>
++              {charts.loading ? (
++                <Skeleton className="h-full w-full" />
++              ) : (
++                <ResponsiveContainer width="100%" height="100%">
++                  <BarChart data={c?.by_project.map((p) => ({ ...p, n: Number(p.n) }))} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
++                    <CartesianGrid stroke="#252A34" strokeDasharray="3 6" horizontal={false} />
++                    <XAxis type="number" {...AXIS} allowDecimals={false} />
++                    <YAxis type="category" dataKey="name" {...AXIS} width={110} />
++                    <Tooltip cursor={{ fill: '#ffffff08' }} contentStyle={TOOLTIP} formatter={(v: number) => [v, 'Событий']} />
++                    <Bar dataKey="n" fill="#5BA8F5" radius={[0, 4, 4, 0]} />
++                  </BarChart>
++                </ResponsiveContainer>
++              )}
++            </ChartCard>
++
++            <ChartCard title="Типы событий" empty={!charts.loading && (c?.by_event.length ?? 0) === 0}>
++              {charts.loading ? (
++                <Skeleton className="h-full w-full" />
++              ) : (
++                <ResponsiveContainer width="100%" height="100%">
++                  <BarChart data={c?.by_event.map((e) => ({ ...e, n: Number(e.n) }))} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
++                    <CartesianGrid stroke="#252A34" strokeDasharray="3 6" horizontal={false} />
++                    <XAxis type="number" {...AXIS} allowDecimals={false} />
++                    <YAxis type="category" dataKey="event_type" {...AXIS} width={110} />
++                    <Tooltip cursor={{ fill: '#ffffff08' }} contentStyle={TOOLTIP} formatter={(v: number) => [v, 'Событий']} />
++                    <Bar dataKey="n" fill="#E3B341" radius={[0, 4, 4, 0]} />
++                  </BarChart>
++                </ResponsiveContainer>
++              )}
++            </ChartCard>
++          </div>
++
++          {(charts.loading || progress.length > 0) && (
++            <ChartCard title="Прогресс по заданиям (по экзаменам)" empty={false}>
++              {charts.loading ? (
++                <Skeleton className="h-full w-full" />
++              ) : (
++                <ResponsiveContainer width="100%" height="100%">
++                  <BarChart data={progress} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
++                    <CartesianGrid stroke="#252A34" strokeDasharray="3 6" vertical={false} />
++                    <XAxis dataKey="exam" {...AXIS} />
++                    <YAxis {...AXIS} allowDecimals={false} />
++                    <Tooltip cursor={{ fill: '#ffffff08' }} contentStyle={TOOLTIP} />
++                    <Legend wrapperStyle={{ fontSize: 12 }} />
++                    <Bar dataKey="Попыток" fill="#5B8DEF" radius={[3, 3, 0, 0]} />
++                    <Bar dataKey="Верных" fill="#3DBE7A" radius={[3, 3, 0, 0]} />
++                  </BarChart>
++                </ResponsiveContainer>
++              )}
++            </ChartCard>
++          )}
++        </>
++      )}
++
++      <AllUserData userId={id} />
++    </div>
++  );
++}
+diff --git a/src/pages/Users.tsx b/src/pages/Users.tsx
+index a60be6a..b8d132d 100644
+--- a/src/pages/Users.tsx
++++ b/src/pages/Users.tsx
+@@ -1,5 +1,6 @@
+ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+-import { Info, RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, UserCheck } from 'lucide-react';
++import { RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, UserCheck } from 'lucide-react';
++import { UsersTable } from '@/components/users/UsersTable';
+ import { StatCard } from '@/components/dashboard/StatCard';
+ import { PeriodPicker, useRangeState } from '@/components/ui/PeriodPicker';
+ import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States';
+@@ -22,18 +23,12 @@ export default function Users() {
+ 
+   return (
+     <div className="space-y-6">
+-      <div className="flex flex-wrap items-start justify-between gap-3">
+-        <div className="flex max-w-3xl gap-3 rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-muted">
+-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+-          <p>
+-            Здесь только агрегированные числа — без e-mail и персональных данных. «Посетители» (анонимные, раздел Analytics),
+-            «зарегистрированные» (аккаунты Supabase Auth) и «администраторы» учитываются раздельно. Привязка пользователя к
+-            сервису появляется, когда приложение вызывает <code className="text-fg">cc_register_service_user</code> (см. docs/connect-service.md).
+-          </p>
+-        </div>
++      <div className="flex flex-wrap items-start justify-end gap-3">
+         <button className="btn" onClick={refresh}><RefreshCw className="h-4 w-4" /> Обновить</button>
+       </div>
+ 
++      <UsersTable />
++
+       {summary.error ? (
+         <div className="card"><ErrorState message={summary.error} onRetry={summary.reload} /></div>
+       ) : (
+diff --git a/src/types/index.ts b/src/types/index.ts
+index d4f6cb3..90b0888 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -70,6 +70,12 @@ export interface ServiceRow {
+   own: MaintenanceRow | null;
+   /** Последнее изменение сервиса или его настроек обслуживания. */
+   updatedAt: string;
++  /**
++   * Подключена ли на сайте заглушка maintenance.js:
++   * ok — был визит с заглушкой за последние 7 дней, missing — не было, unknown — данных нет (миграция 0006 не применена).
++   */
++  guard: 'ok' | 'missing' | 'unknown';
++  guardSeenAt: string | null;
+ }
+ 
+ export interface AnalyticsOverview {
+@@ -190,3 +196,86 @@ export interface ActivityRow {
+   details: Record<string, unknown> | null;
+   created_at: string;
+ }
++
++// ---------- пользователи (карточка) ----------
++
++export interface UserListRow {
++  user_id: string;
++  email: string | null;
++  phone: string | null;
++  display_name: string | null;
++  username: string | null;
++  created_at: string;
++  last_sign_in_at: string | null;
++  is_admin: boolean;
++  is_banned: boolean;
++  services: string[];
++  total: number;
++}
++
++export interface UserOverview {
++  auth: {
++    id: string;
++    email: string | null;
++    phone: string | null;
++    email_confirmed_at: string | null;
++    phone_confirmed_at: string | null;
++    created_at: string;
++    updated_at: string | null;
++    last_sign_in_at: string | null;
++    banned_until: string | null;
++    is_anonymous: boolean;
++    providers: string[] | null;
++    user_metadata: Record<string, unknown>;
++  };
++  profile: Record<string, unknown> | null;
++  is_admin: boolean;
++  projects: {
++    slug: string;
++    name: string;
++    access_level: string;
++    is_active: boolean;
++    expires_at: string | null;
++    since: string;
++  }[];
++}
++
++export interface UserCharts {
++  activity: { day: string; n: number }[];
++  attempts: {
++    at: string;
++    exam_id: string;
++    mode: string;
++    status: string;
++    score: number | null;
++    max_score: number | null;
++    percentage: number | null;
++  }[];
++  by_project: { slug: string; name: string; n: number }[];
++  by_event: { event_type: string; n: number }[];
++  progress: { exam_id: string; tasks: number; attempts: number; correct: number }[];
++  totals: {
++    attempts: number;
++    attempts_done: number;
++    avg_percentage: number | null;
++    best_percentage: number | null;
++    events: number;
++    achievements: number;
++    goals: number;
++    notifications_unread: number;
++    last_activity: string | null;
++  };
++}
++
++export interface UserTableInfo {
++  tbl: string;
++  depth: number;
++  via: string;
++  row_count: number;
++}
++
++export interface UserTableRows {
++  total: number;
++  rows: Record<string, unknown>[];
++  hidden_columns: string[];
++}
+diff --git a/src/utils/status.ts b/src/utils/status.ts
+index 87a8ae0..52cc133 100644
+--- a/src/utils/status.ts
++++ b/src/utils/status.ts
+@@ -1,5 +1,8 @@
+ import type { HealthRow, MaintenanceRow, Service, ServiceRow, ServiceStatus } from '@/types';
+ 
++/** Заглушку считаем подключённой, если с неё был визит за последние 7 дней. */
++const GUARD_FRESH_MS = 7 * 24 * 3600 * 1000;
++
+ export const STATUS_META: Record<
+   ServiceStatus,
+   { label: string; dot: string; text: string; bg: string }
+@@ -22,6 +25,8 @@ export function buildServiceRows(
+   visitors24h: Record<string, number>,
+   /** Проверка старше этого срока не считается актуальной → статус unknown (монитор мог остановиться). */
+   staleAfterMs: number = Infinity,
++  /** service_id → последний визит с заглушкой; null — данных нет (миграция 0006 не применена). */
++  guardSeen: Record<string, string> | null = null,
+ ): ServiceRow[] {
+   const now = Date.now();
+   const globalRow = maintenance.find((m) => m.is_global);
+@@ -51,6 +56,8 @@ export function buildServiceRows(
+       visitors24h: visitors24h[service.id] ?? 0,
+       own: own ?? null,
+       updatedAt: own && own.updated_at > service.updated_at ? own.updated_at : service.updated_at,
++      guardSeenAt: guardSeen?.[service.id] ?? null,
++      guard: guardSeen === null ? 'unknown' : guardSeen[service.id] && now - new Date(guardSeen[service.id]).getTime() < GUARD_FRESH_MS ? 'ok' : 'missing',
+     };
+   });
+ }
+diff --git a/supabase/migrations/0005_users_full_data.sql b/supabase/migrations/0005_users_full_data.sql
+new file mode 100644
+index 0000000..3419986
+--- /dev/null
++++ b/supabase/migrations/0005_users_full_data.sql
+@@ -0,0 +1,413 @@
++-- =====================================================================
++-- nmchv Control Center — миграция 0005
++-- Полные данные пользователей для администраторов.
++--
++--  * Только добавление функций. Таблицы не создаются и не меняются.
++--  * Все функции — SECURITY DEFINER с проверкой cc_require_admin().
++--  * «Все данные пользователя» собираются автоматически: функция сама находит
++--    все таблицы схемы public, связанные с auth.users (напрямую или через
++--    цепочку внешних ключей до 3 уровней). Новые таблицы и колонки,
++--    которые вы добавите позже, появятся в карточке без изменений кода.
++--  * Колонки с секретами (имя содержит hash / password / secret / token)
++--    не отдаются никогда: это не данные пользователя, а защитные значения.
++--  * Каждый просмотр карточки пишется в cc_admin_activity (кто и чьи данные открыл).
++-- =====================================================================
++
++-- ---------- служебное: какие таблицы относятся к пользователю ----------
++-- Таблицы с префиксом cc_ (служебные таблицы панели) исключены, кроме cc_service_users.
++create or replace function public.cc_user_scope()
++returns table (tbl text, depth integer, parent_tbl text, fk_col text, parent_col text, user_cols text[])
++language sql stable security definer
++set search_path = public
++as $$
++  with recursive fks as (
++    select c.conrelid, c.confrelid, (a.attname::text collate "default") as col, (af.attname::text collate "default") as pcol
++    from pg_constraint c
++    join pg_attribute a  on a.attrelid  = c.conrelid  and a.attnum  = c.conkey[1]
++    join pg_attribute af on af.attrelid = c.confrelid and af.attnum = c.confkey[1]
++    where c.contype = 'f'
++      and array_length(c.conkey, 1) = 1
++      and c.connamespace = 'public'::regnamespace
++  ),
++  direct as (
++    select f.conrelid as rel, array_agg(f.col order by f.col) as ucols
++    from fks f
++    where f.confrelid = 'auth.users'::regclass
++    group by f.conrelid
++  ),
++  walk(rel, depth, parent, fk_col, parent_col, ucols, path) as (
++    select d.rel, 0, null::oid, null::text, null::text, d.ucols, array[d.rel]
++    from direct d
++    union all
++    select f.conrelid, w.depth + 1, f.confrelid, f.col, f.pcol, null::text[], w.path || f.conrelid
++    from walk w
++    join fks f on f.confrelid = w.rel
++    where w.depth < 3 and not (f.conrelid = any (w.path))
++  ),
++  best as (
++    select distinct on (w.rel) w.*
++    from walk w
++    order by w.rel, w.depth
++  )
++  select b.rel::regclass::text,
++         b.depth,
++         case when b.parent is null then null else b.parent::regclass::text end,
++         b.fk_col,
++         b.parent_col,
++         b.ucols
++  from best b
++  where (b.rel::regclass::text !~ '^cc_' or b.rel::regclass::text = 'cc_service_users')
++  order by b.depth, b.rel::regclass::text;
++$$;
++
++-- SQL-условие «строка принадлежит пользователю $1» для таблицы (рекурсивно по цепочке FK).
++create or replace function public.cc_scope_where(p_map jsonb, p_tbl text)
++returns text
++language plpgsql stable security definer
++set search_path = public
++as $$
++declare r jsonb := p_map -> p_tbl;
++begin
++  if r is null then
++    raise exception 'unknown table' using errcode = '22023';
++  end if;
++  if (r ->> 'depth')::integer = 0 then
++    return '(' || (
++      select string_agg(format('%I = $1', c), ' or ')
++      from jsonb_array_elements_text(r -> 'user_cols') c
++    ) || ')';
++  end if;
++  return format(
++    '%I in (select %I from public.%I where %s)',
++    r ->> 'fk_col', r ->> 'parent_col', r ->> 'parent_tbl',
++    public.cc_scope_where(p_map, r ->> 'parent_tbl')
++  );
++end $$;
++
++-- Колонки, которые нельзя отдавать (секреты).
++create or replace function public.cc_hidden_cols(p_tbl text)
++returns text[]
++language sql stable security definer
++set search_path = public
++as $$
++  select coalesce(array_agg(c.column_name::text), '{}')
++  from information_schema.columns c
++  where c.table_schema = 'public' and c.table_name = p_tbl
++    and c.column_name ~* '(hash|password|passwd|secret|token)';
++$$;
++
++create or replace function public.cc_scope_map()
++returns jsonb
++language sql stable security definer
++set search_path = public
++as $$
++  select coalesce(jsonb_object_agg(s.tbl, to_jsonb(s)), '{}'::jsonb) from public.cc_user_scope() s;
++$$;
++
++-- ---------- список пользователей ----------
++create or replace function public.cc_users_list(
++  p_q      text    default null,
++  p_limit  integer default 50,
++  p_offset integer default 0,
++  p_sort   text    default 'created_desc'
++)
++returns table (
++  user_id uuid, email text, phone text, display_name text, username text,
++  created_at timestamptz, last_sign_in_at timestamptz,
++  is_admin boolean, is_banned boolean, services text[], total bigint
++)
++language plpgsql stable security definer
++set search_path = public
++as $$
++#variable_conflict use_column
++declare
++  v_q text := nullif(trim(p_q), '');
++  v_like text;
++begin
++  perform public.cc_require_admin();
++  if v_q is not null then
++    v_like := '%' || replace(replace(replace(v_q, '\', '\\'), '%', '\%'), '_', '\_') || '%';
++  end if;
++
++  return query
++  with base as (
++    select u.id, u.email::text as email, u.phone::text as phone,
++           p.display_name, p.username,
++           u.created_at, u.last_sign_in_at,
++           exists (select 1 from public.cc_admin_users a where a.auth_user_id = u.id) as is_admin,
++           (u.banned_until is not null and u.banned_until > now()) as is_banned,
++           coalesce((
++             select array_agg(distinct pr.slug order by pr.slug)
++             from public.user_project_access upa
++             join public.projects pr on pr.id = upa.project_id
++             where upa.user_id = u.id and upa.is_active
++           ), '{}') as services
++    from auth.users u
++    left join public.profiles p on p.id = u.id
++    where v_q is null
++       or u.email ilike v_like
++       or u.phone ilike v_like
++       or p.display_name ilike v_like
++       or p.username ilike v_like
++       or u.id::text = v_q
++       or u.raw_user_meta_data::text ilike v_like
++  )
++  select b.id, b.email, b.phone, b.display_name, b.username, b.created_at, b.last_sign_in_at,
++         b.is_admin, b.is_banned, b.services, count(*) over ()
++  from base b
++  order by
++    case when p_sort = 'created_asc'   then b.created_at end asc,
++    case when p_sort = 'seen_desc'     then b.last_sign_in_at end desc nulls last,
++    case when p_sort = 'email_asc'     then b.email end asc,
++    case when p_sort not in ('created_asc', 'seen_desc', 'email_asc') then b.created_at end desc
++  limit greatest(1, least(coalesce(p_limit, 50), 200))
++  offset greatest(0, coalesce(p_offset, 0));
++end $$;
++
++-- ---------- карточка пользователя: основное ----------
++-- Возвращает jsonb: {auth, profile, projects, is_admin}. Пишет просмотр в журнал.
++create or replace function public.cc_user_overview(p_user uuid)
++returns jsonb
++language plpgsql security definer
++set search_path = public
++as $$
++declare
++  v_admin uuid := public.cc_require_admin();
++  v_auth  jsonb;
++  v_out   jsonb;
++begin
++  select jsonb_build_object(
++           'id', u.id,
++           'email', u.email,
++           'phone', u.phone,
++           'email_confirmed_at', u.email_confirmed_at,
++           'phone_confirmed_at', u.phone_confirmed_at,
++           'created_at', u.created_at,
++           'updated_at', u.updated_at,
++           'last_sign_in_at', u.last_sign_in_at,
++           'banned_until', u.banned_until,
++           'is_anonymous', coalesce(u.is_anonymous, false),
++           'providers', u.raw_app_meta_data -> 'providers',
++           'user_metadata', coalesce(u.raw_user_meta_data, '{}'::jsonb)
++         )
++  into v_auth
++  from auth.users u where u.id = p_user;
++
++  if v_auth is null then
++    raise exception 'user not found' using errcode = 'P0002';
++  end if;
++
++  v_out := jsonb_build_object(
++    'auth', v_auth,
++    'profile', (select to_jsonb(p) from public.profiles p where p.id = p_user),
++    'is_admin', exists (select 1 from public.cc_admin_users a where a.auth_user_id = p_user),
++    'projects', coalesce((
++      select jsonb_agg(jsonb_build_object(
++               'slug', pr.slug, 'name', pr.name, 'access_level', upa.access_level,
++               'is_active', upa.is_active, 'expires_at', upa.expires_at, 'since', upa.created_at
++             ) order by pr.name)
++      from public.user_project_access upa
++      join public.projects pr on pr.id = upa.project_id
++      where upa.user_id = p_user
++    ), '[]'::jsonb)
++  );
++
++  insert into public.cc_admin_activity (admin_id, action, details)
++  values (v_admin, 'user.view', jsonb_build_object('user_id', p_user));
++
++  return v_out;
++end $$;
++
++-- ---------- карточка пользователя: данные для графиков ----------
++create or replace function public.cc_user_charts(p_user uuid, p_days integer default 90, p_tz text default 'UTC')
++returns jsonb
++language plpgsql stable security definer
++set search_path = public
++as $$
++declare
++  v_days integer := greatest(7, least(coalesce(p_days, 90), 730));
++  v_from timestamptz := now() - make_interval(days => v_days);
++  v_tz   text := coalesce(p_tz, 'UTC');
++begin
++  perform public.cc_require_admin();
++
++  return jsonb_build_object(
++    -- активность по дням из всех источников
++    'activity', coalesce((
++      select jsonb_agg(jsonb_build_object('day', d.day, 'n', d.n) order by d.day)
++      from (
++        select (e.ts at time zone v_tz)::date as day, count(*) as n
++        from (
++          select created_at as ts from public.user_activity where user_id = p_user
++          union all select started_at from public.attempts where user_id = p_user
++          union all select created_at from public.tutor_activity_logs where student_id = p_user
++          union all select started_at from public.forms_submissions where respondent_id = p_user
++          union all select to_timestamp(a.ts / 1000.0)
++                    from public.geotrainer_gt_attempts a
++                    join public.geotrainer_gt_users g on g.login_key = a.login_key
++                    where g.linked_user_id = p_user and a.ts > 0
++        ) e
++        where e.ts >= v_from
++        group by 1
++      ) d
++    ), '[]'::jsonb),
++
++    -- попытки экзаменов: динамика результата
++    'attempts', coalesce((
++      select jsonb_agg(jsonb_build_object(
++               'at', a.started_at, 'exam_id', a.exam_id, 'mode', a.mode, 'status', a.status,
++               'score', a.score, 'max_score', a.max_score, 'percentage', a.percentage
++             ) order by a.started_at)
++      from public.attempts a
++      where a.user_id = p_user and a.started_at >= v_from
++    ), '[]'::jsonb),
++
++    -- события по сервисам
++    'by_project', coalesce((
++      select jsonb_agg(jsonb_build_object('slug', x.slug, 'name', x.name, 'n', x.n) order by x.n desc)
++      from (
++        select pr.slug, pr.name, count(*) as n
++        from public.user_activity ua
++        join public.projects pr on pr.id = ua.project_id
++        where ua.user_id = p_user and ua.created_at >= v_from
++        group by pr.slug, pr.name
++      ) x
++    ), '[]'::jsonb),
++
++    -- события по типам
++    'by_event', coalesce((
++      select jsonb_agg(jsonb_build_object('event_type', x.event_type, 'n', x.n) order by x.n desc)
++      from (
++        select ua.event_type, count(*) as n
++        from public.user_activity ua
++        where ua.user_id = p_user and ua.created_at >= v_from
++        group by ua.event_type
++        order by 2 desc limit 12
++      ) x
++    ), '[]'::jsonb),
++
++    -- прогресс по заданиям (exam_trainer)
++    'progress', coalesce((
++      select jsonb_agg(jsonb_build_object(
++               'exam_id', x.exam_id, 'tasks', x.tasks, 'attempts', x.attempts, 'correct', x.correct
++             ) order by x.exam_id)
++      from (
++        select tp.exam_id, count(*) as tasks, sum(tp.attempts_count) as attempts, sum(tp.correct_count) as correct
++        from public.task_progress tp
++        where tp.user_id = p_user
++        group by tp.exam_id
++      ) x
++    ), '[]'::jsonb),
++
++    -- сводные числа
++    'totals', jsonb_build_object(
++      'attempts',       (select count(*) from public.attempts where user_id = p_user),
++      'attempts_done',  (select count(*) from public.attempts where user_id = p_user and status = 'completed'),
++      'avg_percentage', (select round(avg(percentage), 1) from public.attempts where user_id = p_user and status = 'completed' and percentage is not null),
++      'best_percentage',(select max(percentage) from public.attempts where user_id = p_user and status = 'completed'),
++      'events',         (select count(*) from public.user_activity where user_id = p_user),
++      'achievements',   (select count(*) from public.user_achievements where user_id = p_user),
++      'goals',          (select count(*) from public.user_goals where user_id = p_user),
++      'notifications_unread', (select count(*) from public.notifications where user_id = p_user and not is_read),
++      'last_activity',  (select max(ts) from (
++                           select max(created_at) as ts from public.user_activity where user_id = p_user
++                           union all select max(started_at) from public.attempts where user_id = p_user
++                           union all select max(created_at) from public.tutor_activity_logs where student_id = p_user
++                         ) t)
++    )
++  );
++end $$;
++
++-- ---------- карточка пользователя: все таблицы с данными ----------
++create or replace function public.cc_user_tables(p_user uuid)
++returns table (tbl text, depth integer, via text, row_count bigint)
++language plpgsql stable security definer
++set search_path = public
++as $$
++declare
++  v_map jsonb := public.cc_scope_map();
++  r     record;
++  v_n   bigint;
++begin
++  perform public.cc_require_admin();
++
++  for r in select * from public.cc_user_scope() loop
++    execute format('select count(*) from public.%I where %s', r.tbl, public.cc_scope_where(v_map, r.tbl))
++      into v_n using p_user;
++    tbl := r.tbl;
++    depth := r.depth;
++    via := case when r.depth = 0 then 'user' else r.parent_tbl end;
++    row_count := v_n;
++    return next;
++  end loop;
++end $$;
++
++-- Строки одной таблицы, принадлежащие пользователю (постранично, секретные колонки убраны).
++create or replace function public.cc_user_table_rows(
++  p_user   uuid,
++  p_table  text,
++  p_limit  integer default 50,
++  p_offset integer default 0
++)
++returns jsonb
++language plpgsql stable security definer
++set search_path = public
++as $$
++declare
++  v_map    jsonb := public.cc_scope_map();
++  v_where  text;
++  v_hidden text[];
++  v_order  text;
++  v_total  bigint;
++  v_rows   jsonb;
++  v_lim    integer := greatest(1, least(coalesce(p_limit, 50), 200));
++  v_off    integer := greatest(0, coalesce(p_offset, 0));
++begin
++  perform public.cc_require_admin();
++
++  -- имя таблицы принимается только из найденного списка (защита от инъекций)
++  if not (v_map ? p_table) then
++    raise exception 'unknown table' using errcode = '22023';
++  end if;
++  v_where  := public.cc_scope_where(v_map, p_table);
++  v_hidden := public.cc_hidden_cols(p_table);
++
++  select format('%I desc', c.column_name) into v_order
++  from information_schema.columns c
++  where c.table_schema = 'public' and c.table_name = p_table
++    and c.column_name in ('created_at', 'started_at', 'recorded_at', 'updated_at', 'joined_at', 'unlocked_at', 'last_seen', 'at', 'ts')
++  order by array_position(array['created_at','started_at','recorded_at','updated_at','joined_at','unlocked_at','last_seen','at','ts'], c.column_name::text)
++  limit 1;
++
++  execute format('select count(*) from public.%I where %s', p_table, v_where) into v_total using p_user;
++  execute format(
++    'select coalesce(jsonb_agg(to_jsonb(t) - $2), ''[]''::jsonb) from (select * from public.%I where %s order by %s limit %s offset %s) t',
++    p_table, v_where, coalesce(v_order, 'ctid'), v_lim, v_off
++  ) into v_rows using p_user, v_hidden;
++
++  return jsonb_build_object('total', v_total, 'rows', v_rows, 'hidden_columns', to_jsonb(v_hidden));
++end $$;
++
++-- ---------- права ----------
++revoke all on function public.cc_user_scope()                              from public, anon, authenticated;
++revoke all on function public.cc_scope_where(jsonb, text)                  from public, anon, authenticated;
++revoke all on function public.cc_hidden_cols(text)                         from public, anon, authenticated;
++revoke all on function public.cc_scope_map()                               from public, anon, authenticated;
++revoke all on function public.cc_users_list(text, integer, integer, text)  from public, anon;
++revoke all on function public.cc_user_overview(uuid)                       from public, anon;
++revoke all on function public.cc_user_charts(uuid, integer, text)          from public, anon;
++revoke all on function public.cc_user_tables(uuid)                         from public, anon;
++revoke all on function public.cc_user_table_rows(uuid, text, integer, integer) from public, anon;
++
++grant execute on function public.cc_users_list(text, integer, integer, text)  to authenticated;
++grant execute on function public.cc_user_overview(uuid)                       to authenticated;
++grant execute on function public.cc_user_charts(uuid, integer, text)          to authenticated;
++grant execute on function public.cc_user_tables(uuid)                         to authenticated;
++grant execute on function public.cc_user_table_rows(uuid, text, integer, integer) to authenticated;
++
++-- Откат (вручную):
++--   drop function if exists public.cc_user_table_rows(uuid, text, integer, integer),
++--     public.cc_user_tables(uuid), public.cc_user_charts(uuid, integer, text),
++--     public.cc_user_overview(uuid), public.cc_users_list(text, integer, integer, text),
++--     public.cc_scope_map(), public.cc_hidden_cols(text), public.cc_scope_where(jsonb, text),
++--     public.cc_user_scope();
+diff --git a/supabase/migrations/0006_maintenance_enforcement.sql b/supabase/migrations/0006_maintenance_enforcement.sql
+new file mode 100644
+index 0000000..c84ba27
+--- /dev/null
++++ b/supabase/migrations/0006_maintenance_enforcement.sql
+@@ -0,0 +1,202 @@
++-- =====================================================================
++-- nmchv Control Center — миграция 0006
++-- Режим обслуживания, который действительно закрывает сервис.
++--
++-- Раньше кнопка только меняла флаг, а скрыть интерфейс мог лишь клиентский
++-- скрипт maintenance.js (и только там, где он подключён). Теперь:
++--
++--  1. БД закрывается на сервере: на таблицы сервисов ставится RESTRICTIVE-политика
++--     RLS. Пока сервис на обслуживании, пользователи (anon/authenticated) не могут
++--     читать и писать его таблицы, даже если обойдут страницу-заглушку.
++--     Администраторы панели продолжают работать.
++--  2. Статус «обслуживание» синхронизируется в таблицу projects
++--     (карточки на портале показывают «обслуживание»).
++--  3. Панель узнаёт, подключена ли заглушка на сайте (cc_guard_ping / cc_guard_status).
++--
++-- Только добавление. Данные сервисов не меняются; политики можно снять
++-- (см. откат в конце файла).
++-- =====================================================================
++
++-- ---------- 1. состояние обслуживания сервиса ----------
++create or replace function public.cc_service_in_maintenance(p_slug text)
++returns boolean
++language sql stable security definer
++set search_path = public
++as $$
++  select coalesce((select m.is_active from public.cc_get_maintenance(p_slug) m limit 1), false);
++$$;
++
++-- «Доступ разрешён»: сервис не на обслуживании ИЛИ запрос от администратора панели.
++-- Отдельная функция с правом для anon: в политике нельзя вызывать cc_is_admin() от имени anon.
++create or replace function public.cc_maintenance_gate(p_slug text)
++returns boolean
++language sql stable security definer
++set search_path = public
++as $$
++  select not public.cc_service_in_maintenance(p_slug)
++      or exists (select 1 from public.cc_admin_users a where a.auth_user_id = auth.uid());
++$$;
++
++revoke all on function public.cc_service_in_maintenance(text) from public;
++revoke all on function public.cc_maintenance_gate(text)       from public;
++grant execute on function public.cc_service_in_maintenance(text) to anon, authenticated;
++grant execute on function public.cc_maintenance_gate(text)       to anon, authenticated;
++
++-- ---------- 2. серверная блокировка таблиц ----------
++-- Какие таблицы принадлежат какому сервису (slug из cc_services):
++--   exam_trainer — attempts, attempt_tasks, attempt_answers, task_progress, task_answer_keys, exam_scoring_rules
++--   tutor        — tutor_*
++--   geotrainer   — geotrainer_*
++--   forms        — forms_*   (сработает, когда в панели появится сервис со slug «forms»)
++-- Общие таблицы аккаунта (profiles, user_settings, projects, notifications, …) НЕ блокируются:
++-- ими пользуются все сервисы сразу, а вход в аккаунт должен работать всегда.
++-- Политика ставится только на таблицы, где RLS уже включён (иначе её включение
++-- само по себе закрыло бы таблицу для всех).
++do $$
++declare
++  r      record;
++  v_slug text;
++begin
++  for r in
++    select c.relname, c.relrowsecurity
++    from pg_class c
++    where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
++      and (
++        c.relname in ('attempts', 'attempt_tasks', 'attempt_answers', 'task_progress', 'task_answer_keys', 'exam_scoring_rules')
++        or c.relname like 'tutor\_%' or c.relname like 'geotrainer\_%' or c.relname like 'forms\_%'
++      )
++  loop
++    v_slug := case
++      when r.relname like 'tutor\_%'      then 'tutor'
++      when r.relname like 'geotrainer\_%' then 'geotrainer'
++      when r.relname like 'forms\_%'      then 'forms'
++      else 'exam_trainer'
++    end;
++
++    if not r.relrowsecurity then
++      raise notice 'RLS выключен на public.% — блокировка при обслуживании НЕ применена (включите RLS и заново выполните этот файл)', r.relname;
++      continue;
++    end if;
++
++    execute format('drop policy if exists cc_maintenance_block on public.%I', r.relname);
++    execute format(
++      'create policy cc_maintenance_block on public.%I as restrictive for all to anon, authenticated '
++      'using ((select public.cc_maintenance_gate(%L))) with check ((select public.cc_maintenance_gate(%L)))',
++      r.relname, v_slug, v_slug
++    );
++  end loop;
++end $$;
++
++-- ---------- 3. синхронизация со статусом в projects ----------
++-- Проекты, переведённые автоматически, запоминаются вместе с прежним статусом,
++-- чтобы при снятии обслуживания вернуть именно его. Статусы, выставленные вручную, не трогаем.
++create or replace function public.cc_sync_projects_status()
++returns trigger
++language plpgsql security definer
++set search_path = public
++as $$
++declare
++  v_managed jsonb;
++  r         record;
++begin
++  if to_regclass('public.projects') is null then
++    return null;
++  end if;
++
++  select coalesce(s.value, '{}'::jsonb) into v_managed
++  from public.cc_system_settings s where s.key = 'maintenance.projects_synced';
++  v_managed := coalesce(v_managed, '{}'::jsonb);
++  if jsonb_typeof(v_managed) <> 'object' then
++    v_managed := '{}'::jsonb;
++  end if;
++
++  -- включить: сервис на обслуживании, проект ещё нет
++  for r in
++    select p.id, p.status
++    from public.projects p
++    join public.cc_services s on replace(lower(s.slug), '-', '_') = replace(lower(p.slug), '-', '_')
++    where p.status <> 'maintenance' and public.cc_service_in_maintenance(s.slug)
++  loop
++    update public.projects set status = 'maintenance' where id = r.id;
++    v_managed := v_managed || jsonb_build_object(r.id::text, r.status);
++  end loop;
++
++  -- вернуть: проект переводили мы, а обслуживание уже снято
++  for r in
++    select p.id, p.status
++    from public.projects p
++    left join public.cc_services s on replace(lower(s.slug), '-', '_') = replace(lower(p.slug), '-', '_')
++    where v_managed ? p.id::text
++      and (s.id is null or not public.cc_service_in_maintenance(s.slug))
++  loop
++    if r.status = 'maintenance' then
++      update public.projects set status = coalesce(v_managed ->> r.id::text, 'available') where id = r.id;
++    end if;
++    v_managed := v_managed - r.id::text;
++  end loop;
++
++  insert into public.cc_system_settings (key, value) values ('maintenance.projects_synced', v_managed)
++  on conflict (key) do update set value = excluded.value;
++
++  return null;
++end $$;
++
++revoke all on function public.cc_sync_projects_status() from public, anon, authenticated;
++
++drop trigger if exists cc_maintenance_sync_projects on public.cc_maintenance_settings;
++create trigger cc_maintenance_sync_projects
++  after insert or update on public.cc_maintenance_settings
++  for each statement execute function public.cc_sync_projects_status();
++
++-- ---------- 4. подключена ли заглушка на сайте ----------
++-- Скрипт maintenance.js дёргает это при загрузке страницы сайта. Запись не чаще раза в 10 минут.
++create or replace function public.cc_guard_ping(p_slug text)
++returns void
++language plpgsql security definer
++set search_path = public
++as $$
++declare
++  v_id   uuid;
++  v_last timestamptz;
++begin
++  select s.id into v_id from public.cc_services s where s.slug = p_slug;
++  if v_id is null then
++    return;
++  end if;
++
++  select (ss.settings ->> 'guard_seen_at')::timestamptz into v_last
++  from public.cc_service_settings ss where ss.service_id = v_id;
++  if v_last is not null and v_last > now() - interval '10 minutes' then
++    return;
++  end if;
++
++  insert into public.cc_service_settings (service_id, settings)
++  values (v_id, jsonb_build_object('guard_seen_at', to_jsonb(now())))
++  on conflict (service_id) do update
++    set settings = public.cc_service_settings.settings || jsonb_build_object('guard_seen_at', to_jsonb(now()));
++end $$;
++
++create or replace function public.cc_guard_status()
++returns table (service_id uuid, guard_seen_at timestamptz)
++language plpgsql stable security definer
++set search_path = public
++as $$
++#variable_conflict use_column
++begin
++  perform public.cc_require_admin();
++  return query
++  select ss.service_id, (ss.settings ->> 'guard_seen_at')::timestamptz
++  from public.cc_service_settings ss
++  where ss.settings ? 'guard_seen_at';
++end $$;
++
++revoke all on function public.cc_guard_ping(text)   from public;
++revoke all on function public.cc_guard_status()     from public, anon;
++grant execute on function public.cc_guard_ping(text) to anon, authenticated;
++grant execute on function public.cc_guard_status()   to authenticated;
++
++-- Откат (вручную):
++--   drop trigger if exists cc_maintenance_sync_projects on public.cc_maintenance_settings;
++--   drop function if exists public.cc_sync_projects_status(), public.cc_guard_status(),
++--     public.cc_guard_ping(text), public.cc_maintenance_gate(text), public.cc_service_in_maintenance(text);
++--   и для каждой таблицы: drop policy if exists cc_maintenance_block on public.<таблица>;

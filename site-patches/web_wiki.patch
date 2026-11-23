@@ -1,0 +1,12 @@
+diff --git a/index.html b/index.html
+index 267ea1e..fb0d613 100644
+--- a/index.html
++++ b/index.html
+@@ -2,6 +2,7 @@
+ <html lang="ru">
+ <head>
+   <meta charset="utf-8">
++<script src="https://admin.nmchv.ru/maintenance.js" data-service="web_wiki"></script>
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <title>Учебная вики — Алексей Немичев</title>
+   <meta name="description" content="Учебные материалы Алексея Немичева: конспекты, термины, презентации и практические работы по географии.">
