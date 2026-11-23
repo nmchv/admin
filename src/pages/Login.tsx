@@ -36,7 +36,7 @@ export default function Login() {
 
   return (
     <div className="grid min-h-full place-items-center px-4 py-10">
-      <form onSubmit={submit} className="card w-full max-w-sm space-y-5 p-6">
+      <div className="card w-full max-w-sm space-y-5 p-6">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-elevated">
             <Lock className="h-4 w-4 text-accent" />
@@ -48,7 +48,7 @@ export default function Login() {
         </div>
 
         {!showReset ? (
-          <>
+          <form onSubmit={submit} className="space-y-5">
             <label className="block space-y-1.5">
               <span className="text-xs font-semibold text-muted">Email</span>
               <input
@@ -91,7 +91,7 @@ export default function Login() {
               <Mail className="h-3.5 w-3.5 mr-1.5" />
               Забыли пароль?
             </button>
-          </>
+          </form>
         ) : (
           <form onSubmit={handleResetRequest} className="space-y-5">
             <div className="text-center space-y-1">
@@ -142,7 +142,7 @@ export default function Login() {
             </button>
           </form>
         )}
-      </form>
+      </div>
     </div>
   );
 }
