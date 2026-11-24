@@ -19,6 +19,7 @@ export function GlobalMaintenance() {
   // Исключённые из глобального режима сервисы не затрагиваются.
   const affected = rows.filter((r) => !r.own?.exempt_from_global).length;
   const exempt = rows.length - affected;
+  const noGuard = rows.filter((r) => !r.own?.exempt_from_global && r.guard === 'missing');
   const formError = dialog === 'enable' ? validateMaintenance(message, until) : null;
 
   const close = () => {
@@ -92,11 +93,21 @@ export function GlobalMaintenance() {
           <div className="flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
-              Все приложения будут заменены страницей «Ведутся технические работы» и станут недоступны пользователям до
-              снятия режима. Будет затронуто сервисов: <b>{affected}</b>
+              Все приложения будут заменены страницей «Ведутся технические работы», а их таблицы в базе данных закроются для
+              пользователей до снятия режима. Будет затронуто сервисов: <b>{affected}</b>
               {exempt > 0 && ` (ещё ${exempt} исключено из глобального режима)`}.
             </p>
           </div>
+          {noGuard.length > 0 && (
+            <div className="flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>
+                Страница-заглушка не подтверждена на сайтах: <b>{noGuard.map((r) => r.service.name).join(', ')}</b>. Их базы
+                данных закроются, но сами сайты продолжат открываться, пока на них не подключён{' '}
+                <code className="text-fg">maintenance.js</code>.
+              </p>
+            </div>
+          )}
           <MaintenanceFields message={message} until={until} onMessage={setMessage} onUntil={setUntil} disabled={busy} />
           {formError && <p className="text-xs text-bad">{formError}</p>}
         </ConfirmDialog>

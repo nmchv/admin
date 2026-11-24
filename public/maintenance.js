@@ -8,11 +8,16 @@
  * Что делает:
  *  - до отрисовки приложения спрашивает у Supabase (RPC cc_get_maintenance), не на обслуживании ли сервис;
  *  - если да — полностью заменяет страницу на единую заглушку SYSTEM MAINTENANCE;
- *  - раз в минуту и при возвращении на вкладку перепроверяет состояние.
+ *  - каждые 20 секунд и при возвращении на вкладку перепроверяет состояние;
+ *  - запоминает последнее известное состояние: если сервис был закрыт, а Supabase
+ *    временно не отвечает, заглушка остаётся (не дольше 6 часов);
+ *  - сообщает панели, что заглушка подключена на сайте (RPC cc_guard_ping).
  *
- * Важно: это клиентская проверка. Она скрывает интерфейс, но не защищает API —
- * для защиты данных используйте RLS и серверные проверки в Supabase.
- * При недоступности проверки (сеть, Supabase) приложение НЕ блокируется (fail-open).
+ * Важно: это клиентская проверка — она скрывает интерфейс. Данные закрывает
+ * серверная часть: миграция 0006 ставит RLS-политики на таблицы сервисов, поэтому
+ * во время обслуживания БД недоступна пользователям, даже в обход этой страницы.
+ * Если состояние неизвестно (первый визит и Supabase не отвечает) — приложение
+ * НЕ блокируется (fail-open), чтобы сбой проверки не уронил сайт.
  *
  * Значения __NMCHV_*__ подставляются при сборке Control Center (публичный anon key).
  */
@@ -24,7 +29,9 @@
   var service = script && script.getAttribute('data-service');
   if (!service || !/^https?:\/\//.test(CFG.url) || !CFG.key) return;
 
-  var POLL_MS = 60000;
+  var POLL_MS = 20000;
+  var CACHE_KEY = 'nmchv_mt_' + service;
+  var CACHE_TTL_MS = 6 * 3600 * 1000;
   var FIRST_CHECK_TIMEOUT_MS = 2500;
   var inMaintenance = false;
 
@@ -37,25 +44,51 @@
   }
   var hideTimer = setTimeout(unhide, FIRST_CHECK_TIMEOUT_MS);
 
-  function check() {
-    return fetch(CFG.url + '/rest/v1/rpc/cc_get_maintenance', {
+  function rpc(name, args) {
+    return fetch(CFG.url + '/rest/v1/rpc/' + name, {
       method: 'POST',
       headers: {
         apikey: CFG.key,
         Authorization: 'Bearer ' + CFG.key,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ p_slug: service }),
+      body: JSON.stringify(args),
       cache: 'no-store',
-    })
+    });
+  }
+
+  function saveCache(state) {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), state: state }));
+    } catch (e) {}
+  }
+  function loadCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (c && c.state && c.state.is_active && Date.now() - c.at < CACHE_TTL_MS) return c.state;
+    } catch (e) {}
+    return null;
+  }
+
+  function check() {
+    return rpc('cc_get_maintenance', { p_slug: service })
       .then(function (r) {
         if (!r.ok) throw new Error('http ' + r.status);
         return r.json();
       })
       .then(function (rows) {
         var row = Array.isArray(rows) ? rows[0] : rows;
-        return row || { is_active: false };
+        var state = row || { is_active: false };
+        saveCache(state);
+        return state;
       });
+  }
+
+  // Сообщаем панели, что заглушка подключена (не чаще раза в 10 минут — ограничивает сама функция).
+  function ping() {
+    try {
+      rpc('cc_guard_ping', { p_slug: service }).catch(function () {});
+    } catch (e) {}
   }
 
   var STYLE =
@@ -160,12 +193,19 @@
         }
         if (state.is_active && !inMaintenance) render(state);
         else if (!state.is_active && inMaintenance) location.reload();
+        // после render: window.stop() внутри него отменил бы уже начатый запрос
+        if (isFirst) ping();
       },
       function () {
-        // fail-open: не удалось проверить — не блокируем приложение
         if (isFirst) {
           clearTimeout(hideTimer);
-          unhide();
+          // сервис был закрыт, а проверить сейчас нельзя — остаёмся на заглушке
+          var known = loadCache();
+          if (known && !inMaintenance) {
+            render(known);
+          } else {
+            unhide(); // состояние неизвестно: fail-open
+          }
         }
       }
     );

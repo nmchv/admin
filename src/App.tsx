@@ -8,7 +8,9 @@ import Dashboard from '@/pages/Dashboard';
 import Login from '@/pages/Login';
 import Profile from '@/pages/Profile';
 import Monitoring from '@/pages/Monitoring';
+import Access from '@/pages/Access';
 import Users from '@/pages/Users';
+import UserDetail from '@/pages/UserDetail';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Services from '@/pages/Services';
@@ -54,6 +56,8 @@ function Gate() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="monitoring" element={<Monitoring />} />
         <Route path="users" element={<Users />} />
+        <Route path="access" element={<Access />} />
+        <Route path="users/:id" element={<UserDetail />} />
         <Route path="logs" element={<Logs />} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />

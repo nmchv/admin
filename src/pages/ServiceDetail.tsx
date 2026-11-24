@@ -200,6 +200,18 @@ export default function ServiceDetail() {
           </div>
         </div>
 
+        {row?.guard === 'missing' && (
+          <div className="mb-4 flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              На сайте не подтверждена страница-заглушка: за последние 7 дней ни один посетитель не загрузил её. Режим
+              обслуживания закроет базу данных сервиса, но сам сайт продолжит открываться. Подключите{' '}
+              <code className="text-fg">maintenance.js</code> на сайте (docs/connect-service.md): первым скриптом в{' '}
+              <code className="text-fg">&lt;head&gt;</code> с <code className="text-fg">data-service=&quot;{service.slug}&quot;</code>.
+            </p>
+          </div>
+        )}
+
         {underGlobal && (
           <div className="mb-4 flex gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs leading-relaxed text-warn">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
@@ -289,7 +301,8 @@ export default function ServiceDetail() {
           onClose={() => !busy && setConfirm(null)}
         >
           <p className="text-sm leading-relaxed text-muted">
-            Пользователи увидят страницу «Ведутся технические работы» вместо приложения.
+            Пользователи увидят страницу «Ведутся технические работы» вместо приложения, а таблицы сервиса в базе данных
+            станут недоступны для чтения и записи до снятия режима. Администраторы панели сохраняют доступ.
             {message.trim() && (
               <>
                 {' '}

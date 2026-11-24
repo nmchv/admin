@@ -4,6 +4,7 @@ import {
   BarChart3,
   ChevronsLeft,
   ChevronsRight,
+  KeyRound,
   LayoutDashboard,
   ScrollText,
   Server,
@@ -23,6 +24,7 @@ export const NAV_MAIN = [
   { to: '/analytics', label: 'Analytics', title: 'Аналитика', icon: BarChart3 },
   { to: '/monitoring', label: 'Monitoring', title: 'Мониторинг', icon: Activity },
   { to: '/users', label: 'Users', title: 'Пользователи', icon: Users },
+  { to: '/access', label: 'Access', title: 'Доступ и права', icon: KeyRound },
   { to: '/logs', label: 'System Logs', title: 'Системные журналы', icon: ScrollText },
 ];
 

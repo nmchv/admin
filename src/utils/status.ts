@@ -1,5 +1,8 @@
 import type { HealthRow, MaintenanceRow, Service, ServiceRow, ServiceStatus } from '@/types';
 
+/** Заглушку считаем подключённой, если с неё был визит за последние 7 дней. */
+const GUARD_FRESH_MS = 7 * 24 * 3600 * 1000;
+
 export const STATUS_META: Record<
   ServiceStatus,
   { label: string; dot: string; text: string; bg: string }
@@ -22,6 +25,8 @@ export function buildServiceRows(
   visitors24h: Record<string, number>,
   /** Проверка старше этого срока не считается актуальной → статус unknown (монитор мог остановиться). */
   staleAfterMs: number = Infinity,
+  /** service_id → последний визит с заглушкой; null — данных нет (миграция 0006 не применена). */
+  guardSeen: Record<string, string> | null = null,
 ): ServiceRow[] {
   const now = Date.now();
   const globalRow = maintenance.find((m) => m.is_global);
@@ -51,6 +56,8 @@ export function buildServiceRows(
       visitors24h: visitors24h[service.id] ?? 0,
       own: own ?? null,
       updatedAt: own && own.updated_at > service.updated_at ? own.updated_at : service.updated_at,
+      guardSeenAt: guardSeen?.[service.id] ?? null,
+      guard: guardSeen === null ? 'unknown' : guardSeen[service.id] && now - new Date(guardSeen[service.id]).getTime() < GUARD_FRESH_MS ? 'ok' : 'missing',
     };
   });
 }

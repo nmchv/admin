@@ -1,5 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Info, RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, UserCheck } from 'lucide-react';
+import { RefreshCw, ShieldCheck, UserPlus, Users as UsersIcon, UserCheck } from 'lucide-react';
+import { UsersTable } from '@/components/users/UsersTable';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { PeriodPicker, useRangeState } from '@/components/ui/PeriodPicker';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States';
@@ -22,17 +23,11 @@ export default function Users() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex max-w-3xl gap-3 rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-muted">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>
-            Здесь только агрегированные числа — без e-mail и персональных данных. «Посетители» (анонимные, раздел Analytics),
-            «зарегистрированные» (аккаунты Supabase Auth) и «администраторы» учитываются раздельно. Привязка пользователя к
-            сервису появляется, когда приложение вызывает <code className="text-fg">cc_register_service_user</code> (см. docs/connect-service.md).
-          </p>
-        </div>
+      <div className="flex flex-wrap items-start justify-end gap-3">
         <button className="btn" onClick={refresh}><RefreshCw className="h-4 w-4" /> Обновить</button>
       </div>
+
+      <UsersTable />
 
       {summary.error ? (
         <div className="card"><ErrorState message={summary.error} onRetry={summary.reload} /></div>

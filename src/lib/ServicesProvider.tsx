@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useAsync } from '@/hooks/useAsync';
 import { useSettings } from '@/lib/SettingsProvider';
 import {
+  fetchGuardStatus,
   fetchLatestHealth,
   fetchMaintenance,
   fetchServices,
@@ -37,6 +38,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     [],
   );
   const visitors = useAsync(fetchVisitors24h, []);
+  const guard = useAsync(fetchGuardStatus, []);
 
   const settings = useSettings();
   const staleAfterMs = Math.max(settings.get('monitoring.interval_minutes') * 3, 15) * 60_000;
@@ -44,9 +46,9 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   const rows = useMemo(
     () =>
       core.data
-        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {}, staleAfterMs)
+        ? buildServiceRows(core.data.services, core.data.maintenance, core.data.health, visitors.data ?? {}, staleAfterMs, guard.error || guard.loading ? null : guard.data ?? {})
         : [],
-    [core.data, visitors.data, staleAfterMs],
+    [core.data, visitors.data, staleAfterMs, guard.data, guard.error, guard.loading],
   );
 
   const value: ServicesContextValue = {
@@ -58,6 +60,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     reload: () => {
       core.reload();
       visitors.reload();
+      guard.reload();
     },
   };
   return <ServicesContext.Provider value={value}>{children}</ServicesContext.Provider>;

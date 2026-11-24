@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ExternalLink, Github, Server, Users } from 'lucide-react';
+import { ExternalLink, Github, Server, TriangleAlert, Users } from 'lucide-react';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { formatNumber, formatRelative } from '@/utils/format';
 import type { ServiceRow } from '@/types';
@@ -24,6 +24,16 @@ export function ServiceCard({ row }: { row: ServiceRow }) {
         </div>
         <StatusBadge status={status} />
       </div>
+
+      {row.guard === 'missing' && (
+        <p
+          className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs leading-snug text-warn"
+          title="За последние 7 дней ни один посетитель не загрузил страницу с подключённой заглушкой maintenance.js"
+        >
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Заглушка не подключена: на сайте режим обслуживания ничего не покажет
+        </p>
+      )}
 
       {maintenance && (
         <p className="rounded-lg bg-maint/10 px-3 py-2 text-xs leading-snug text-maint">
